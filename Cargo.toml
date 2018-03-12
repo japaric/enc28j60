@@ -1,0 +1,16 @@
+[package]
+authors = ["Jorge Aparicio <jorge@japaric.io>"]
+name = "enc28j60"
+version = "0.1.0"
+
+[dependencies.cast]
+version = "0.2.2"
+default-features = false
+
+[dependencies.embedded-hal]
+version = "0.1.2"
+features = ["unproven"]
+
+[dependencies.byteorder]
+default-features = false
+version = "1.2.1"
