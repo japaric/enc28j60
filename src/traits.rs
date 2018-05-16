@@ -58,7 +58,7 @@ impl OffsetSize for Range<u8> {
 }
 
 pub(crate) trait U16Ext {
-    fn from_bytes(low: u8, high: u8) -> Self;
+    fn from_parts(low: u8, high: u8) -> Self;
 
     fn low(self) -> u8;
 
@@ -72,7 +72,7 @@ pub(crate) trait U16Ext {
 }
 
 impl U16Ext for u16 {
-    fn from_bytes(low: u8, high: u8) -> u16 {
+    fn from_parts(low: u8, high: u8) -> u16 {
         ((high as u16) << 8) + low as u16
     }
 

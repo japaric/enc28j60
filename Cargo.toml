@@ -8,14 +8,14 @@ license = "MIT OR Apache-2.0"
 name = "enc28j60"
 readme = "README.md"
 repository = "https://github.com/japaric/enc28j60"
-version = "0.1.0"
+version = "0.2.0"
 
 [dependencies.cast]
 version = "0.2.2"
 default-features = false
 
 [dependencies.embedded-hal]
-version = "0.1.2"
+version = "0.2.0"
 features = ["unproven"]
 
 [dependencies.byteorder]
