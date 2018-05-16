@@ -17,7 +17,6 @@
 
 #![deny(missing_docs)]
 #![deny(warnings)]
-#![feature(unsize)]
 #![no_std]
 
 extern crate byteorder;
