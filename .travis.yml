@@ -3,9 +3,9 @@ language: rust
 matrix:
   include:
     - env: TARGET=x86_64-unknown-linux-gnu
-      rust: nightly
+
     - env: TARGET=thumbv7m-none-eabi
-      rust: nightly
+      rust: beta
 
 before_install: set -e
 
@@ -17,10 +17,7 @@ script:
 
 after_script: set +e
 
-cache:
-  cargo: true
-  directories:
-    - $HOME/.xargo
+cache: cargo
 
 before_cache:
   # Travis can't cache files that are not readable by "others"

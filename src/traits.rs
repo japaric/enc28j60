@@ -1,36 +1,7 @@
-use core::marker::Unsize;
 use core::mem;
 use core::ops::Range;
 
 use byteorder::{ByteOrder, BE, LE};
-
-pub trait Bytes: 'static {
-    fn as_slice(&self) -> &[u8];
-    fn as_mut_slice(&mut self) -> &mut [u8];
-}
-
-impl Bytes for [u8] {
-    fn as_slice(&self) -> &[u8] {
-        self
-    }
-
-    fn as_mut_slice(&mut self) -> &mut [u8] {
-        self
-    }
-}
-
-impl<B> Bytes for B
-where
-    B: Unsize<[u8]> + 'static,
-{
-    fn as_slice(&self) -> &[u8] {
-        self
-    }
-
-    fn as_mut_slice(&mut self) -> &mut [u8] {
-        self
-    }
-}
 
 pub(crate) trait OffsetSize {
     fn offset(self) -> u8;
@@ -58,7 +29,7 @@ impl OffsetSize for Range<u8> {
 }
 
 pub(crate) trait U16Ext {
-    fn from_bytes(low: u8, high: u8) -> Self;
+    fn from_parts(low: u8, high: u8) -> Self;
 
     fn low(self) -> u8;
 
@@ -72,7 +43,7 @@ pub(crate) trait U16Ext {
 }
 
 impl U16Ext for u16 {
-    fn from_bytes(low: u8, high: u8) -> u16 {
+    fn from_parts(low: u8, high: u8) -> u16 {
         ((high as u16) << 8) + low as u16
     }
 

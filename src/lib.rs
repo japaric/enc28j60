@@ -17,7 +17,6 @@
 
 #![deny(missing_docs)]
 #![deny(warnings)]
-#![feature(unsize)]
 #![no_std]
 
 extern crate byteorder;
@@ -337,7 +336,7 @@ where
         self.read_buffer_memory(Some(curr_packet), &mut temp_buf)?;
 
         // next packet pointer
-        let next_packet = u16::from_bytes(temp_buf[0], temp_buf[1]);
+        let next_packet = u16::from_parts(temp_buf[0], temp_buf[1]);
         self.next_packet = next_packet;
 
         // status vector
