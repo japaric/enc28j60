@@ -5,7 +5,8 @@ matrix:
     - env: TARGET=x86_64-unknown-linux-gnu
 
     - env: TARGET=thumbv7m-none-eabi
-      rust: beta
+
+    - env: TARGET=rustfmt
 
 before_install: set -e
 

@@ -5,7 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
-## [Unreleased]
+## [v0.2.1] - 2019-01-30
+
+### Fixed
+
+- Properly work around silicon Erratum #1. Some devices would get stuck while
+  executing `Enc28j60::new` due to a silicon bug because the documented
+  workaround was not properly applied; this has been fixed.
 
 ## [v0.2.0] - 2018-05-16
 

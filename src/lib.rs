@@ -1,8 +1,8 @@
 //! A platform agnostic driver to interface with the ENC28J60 (Ethernet controller)
 //!
-//! This driver was built using [`embedded-hal`] traits.
+//! This driver is built on top of the [`embedded-hal`] traits.
 //!
-//! [`embedded-hal`]: https://docs.rs/embedded-hal/~0.1
+//! [`embedded-hal`]: https://docs.rs/embedded-hal/~0.2
 //!
 //! # Examples
 //!
@@ -28,9 +28,9 @@ use core::ptr;
 use core::u16;
 
 use byteorder::{ByteOrder, LE};
-use cast::{usize, u16};
-use hal::blocking::delay::DelayMs;
+use cast::{u16, usize};
 use hal::blocking;
+use hal::blocking::delay::DelayMs;
 use hal::digital::{InputPin, OutputPin};
 use hal::spi::{Mode, Phase, Polarity};
 
@@ -38,13 +38,13 @@ use traits::U16Ext;
 
 #[macro_use]
 mod macros;
-mod traits;
 mod bank0;
 mod bank1;
 mod bank2;
 mod bank3;
 mod common;
 mod phy;
+mod traits;
 
 /// SPI mode
 pub const MODE: Mode = Mode {
@@ -169,13 +169,14 @@ where
             enc28j60.reset.reset();
         }
 
+        // This doesn't work because of a silicon bug; see workaround below
+        // wait for the clock to settle
+        // while common::ESTAT(enc28j60.read_control_register(common::Register::ESTAT)?).clkrdy() == 0
+        // {
+        // }
+
         // Workaround Errata issue 1
         delay.delay_ms(1);
-
-        // wait for the clock to settle
-        while common::ESTAT(enc28j60.read_control_register(common::Register::ESTAT)?).clkrdy() == 0
-        {
-        }
 
         // disable CLKOUT output
         enc28j60.write_control_register(bank3::Register::ECOCON, 0)?;
@@ -678,11 +679,7 @@ pub unsafe trait IntPin: 'static {}
 
 unsafe impl IntPin for Unconnected {}
 
-unsafe impl<IP> IntPin for IP
-where
-    IP: InputPin + 'static,
-{
-}
+unsafe impl<IP> IntPin for IP where IP: InputPin + 'static {}
 
 #[derive(Clone, Copy, PartialEq)]
 enum Bank {
