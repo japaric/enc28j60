@@ -12,29 +12,31 @@
 //!
 //! # References
 //!
-//! - [ENC28J60 Data Sheet](http://ww1.microchip.com/downloads/en/DeviceDoc/39662e.pdf)
-//! - [ENC28J60 Rev. B7 Silicon Errata](http://ww1.microchip.com/downloads/en/DeviceDoc/80349b.pdf)
+//! - [ENC28J60 Data Sheet (DS39662E)][0]
+//! - [ENC28J60 Rev. B7 Silicon Errata (DS80349C)][1]
+//!
+//! [0]: http://ww1.microchip.com/downloads/en/DeviceDoc/39662e.pdf
+//! [1]: http://ww1.microchip.com/downloads/en/DeviceDoc/80349c.pdf
 
 #![deny(missing_docs)]
+#![deny(rust_2018_compatibility)]
+#![deny(rust_2018_idioms)]
 #![deny(warnings)]
 #![no_std]
 
-extern crate byteorder;
-extern crate cast;
-extern crate embedded_hal as hal;
-
-use core::mem;
-use core::ptr;
 use core::u16;
 
+use as_slice::AsMutSlice;
 use byteorder::{ByteOrder, LE};
-use cast::{u16, usize};
-use hal::blocking;
-use hal::blocking::delay::DelayMs;
-use hal::digital::{InputPin, OutputPin};
-use hal::spi::{Mode, Phase, Polarity};
+use cast::usize;
+use embedded_hal::{
+    blocking::{self, delay::DelayMs},
+    digital::{InputPin, OutputPin},
+    spi::{Mode, Phase, Polarity},
+};
+use owning_slice::IntoSliceTo;
 
-use traits::U16Ext;
+use crate::traits::U16Ext;
 
 #[macro_use]
 mod macros;
@@ -44,6 +46,7 @@ mod bank2;
 mod bank3;
 mod common;
 mod phy;
+mod sealed;
 mod traits;
 
 /// SPI mode
@@ -52,13 +55,31 @@ pub const MODE: Mode = Mode {
     polarity: Polarity::IdleLow,
 };
 
+// Total buffer size (see section 3.2)
+const BUF_SZ: u16 = 8 * 1024;
+
+// Maximum frame length
+const MAX_FRAME_LENGTH: u16 = 1518; // value recommended in the data sheet
+
+// Size of the Frame check sequence (32-bit CRC)
+const CRC_SZ: u16 = 4;
+
 /// Error
+///
+/// *NOTE:* this enum may gain more variants in the future
 #[derive(Debug)]
 pub enum Error<E> {
     /// Late collision
     LateCollision,
+    /// EREVID read as zero; this means that the device is not an ENC28J60 or that it has locked up
+    ErevidIsZero,
+    /// Transmission was aborted
+    TransmitAbort,
     /// SPI error
     Spi(E),
+    #[doc(hidden)]
+    #[allow(non_camel_case_types)]
+    _DO_NOT_MATCH_AGAINST_THIS_VARIANT,
 }
 
 /// Events that the ENC28J60 can notify about via the INT pin
@@ -80,34 +101,29 @@ pub struct Enc28j60<SPI, NCS, INT, RESET> {
     reset: RESET,
     spi: SPI,
 
+    // A packet is pending to be read
+    pending: bool,
+
     bank: Bank,
-    /// address of the next packet in buffer memory
-    // NOTE this should be an `Option` but we know this is a 13-bit address so we'll use `u16::MAX`
-    // as the `None` variant, to avoid an extra byte (enum tag)
+
+    // address of the next packet in buffer memory
     next_packet: u16,
+
     /// End of the RX buffer / Start of the TX buffer
     rxnd: u16,
-    /// End address of the *previous* transmission
-    // NOTE as above this should be an option but we are going to use `u16::MAX` for the `None`
-    // variant
-    txnd: u16,
 }
 
 const NONE: u16 = u16::MAX;
+// See Errata #5
 const RXST: u16 = 0;
 
 impl<E, SPI, NCS, INT, RESET> Enc28j60<SPI, NCS, INT, RESET>
 where
     SPI: blocking::spi::Transfer<u8, Error = E> + blocking::spi::Write<u8, Error = E>,
     NCS: OutputPin,
-    INT: IntPin,
-    RESET: ResetPin,
+    INT: crate::sealed::IntPin,
+    RESET: crate::sealed::ResetPin,
 {
-    // Maximum frame length
-    const MAX_FRAME_LENGTH: u16 = 1518; // value recommended in the data sheet
-                                        // Size of the Frame check sequence (32-bit CRC)
-    const CRC_SZ: u16 = 4; //
-
     /* Constructors */
     /// Creates a new driver from a SPI peripheral, a NCS pin, a RESET pin and an INT
     /// (interrupt) pin
@@ -125,7 +141,7 @@ where
     ///
     /// # Panics
     ///
-    /// If `rx_buf_sz` is greater than `8192` (8 Kibibytes); that's the size of the ENC28J60
+    /// If `rx_buf_sz` is greater than `8192` (8 KibiBytes); that's the size of the ENC28J60
     /// internal memory.
     pub fn new<D>(
         spi: SPI,
@@ -135,54 +151,51 @@ where
         delay: &mut D,
         mut rx_buf_sz: u16,
         src: [u8; 6],
-    ) -> Result<Self, E>
+    ) -> Result<Self, Error<E>>
     where
         D: DelayMs<u8>,
-        RESET: ResetPin,
-        INT: IntPin,
     {
-        // Total buffer size (cf. section 3.2)
-        const BUF_SZ: u16 = 8 * 1024;
-
         // round up `rx_buf_sz` to an even number
         if rx_buf_sz % 2 == 1 {
             rx_buf_sz += 1;
         }
 
-        assert!(rx_buf_sz <= BUF_SZ);
+        assert!(rx_buf_sz <= BUF_SZ && rx_buf_sz != 0);
 
         let mut enc28j60 = Enc28j60 {
             bank: Bank::Bank0,
             int,
             ncs,
-            next_packet: NONE,
+            next_packet: RXST,
+            pending: false,
             reset,
             rxnd: NONE,
             spi,
-            txnd: NONE,
         };
 
         // (software) reset to return to a clean slate state
         if typeid!(RESET == Unconnected) {
             enc28j60.soft_reset()?;
+
+            // work around errata #2
+            delay.delay_ms(1);
         } else {
             enc28j60.reset.reset();
+
+            while common::ESTAT(enc28j60.read_control_register(common::Register::ESTAT)?).clkrdy()
+                == 0
+            {}
         }
 
-        // This doesn't work because of a silicon bug; see workaround below
-        // wait for the clock to settle
-        // while common::ESTAT(enc28j60.read_control_register(common::Register::ESTAT)?).clkrdy() == 0
-        // {
-        // }
-
-        // Workaround Errata issue 1
-        delay.delay_ms(1);
+        if enc28j60.read_control_register(bank3::Register::EREVID)? == 0 {
+            return Err(Error::ErevidIsZero);
+        }
 
         // disable CLKOUT output
         enc28j60.write_control_register(bank3::Register::ECOCON, 0)?;
 
-        // define the boundaries of the TX and RX buffers (cf. section 6.1)
-        // to workaround Errata issue 3 we do the opposite of what section 6.1 of the data sheet
+        // define the boundaries of the TX and RX buffers
+        // to workaround errata #5 we do the opposite of what section 6.1 of the data sheet
         // says: we place the RX buffer at address 0 and the TX buffer after it
         let rxnd = rx_buf_sz - 1;
         enc28j60.rxnd = rxnd;
@@ -193,7 +206,7 @@ where
         enc28j60.write_control_register(bank0::Register::ERXSTH, RXST.high())?;
 
         // RX read pointer
-        // NOTE Errata issue 11 so we are using an *odd* address here instead of ERXST
+        // NOTE Errata #14 so we are using an *odd* address here instead of ERXST
         enc28j60.write_control_register(bank0::Register::ERXRDPTL, rxnd.low())?;
         enc28j60.write_control_register(bank0::Register::ERXRDPTH, rxnd.high())?;
 
@@ -234,8 +247,8 @@ where
 
         // 4. Program the MAMXFL registers with the maximum frame length to be permitted to be
         // received or transmitted
-        enc28j60.write_control_register(bank2::Register::MAMXFLL, Self::MAX_FRAME_LENGTH.low())?;
-        enc28j60.write_control_register(bank2::Register::MAMXFLH, Self::MAX_FRAME_LENGTH.high())?;
+        enc28j60.write_control_register(bank2::Register::MAMXFLL, MAX_FRAME_LENGTH.low())?;
+        enc28j60.write_control_register(bank2::Register::MAMXFLH, MAX_FRAME_LENGTH.high())?;
 
         // 5. Configure the Back-to-Back Inter-Packet Gap register, MABBIPG.
         // Use recommended value of 0x12
@@ -272,96 +285,45 @@ where
 
         Ok(enc28j60)
     }
+}
 
-    /* I/O */
+impl<E, SPI, NCS, INT, RESET> Enc28j60<SPI, NCS, INT, RESET>
+where
+    SPI: blocking::spi::Transfer<u8, Error = E> + blocking::spi::Write<u8, Error = E>,
+    NCS: OutputPin,
+{
     /// Flushes the transmit buffer, ensuring all pending transmissions have completed
-    pub fn flush(&mut self) -> Result<(), Error<E>> {
-        if self.txnd != NONE {
-            // Wait until transmission finishes
-            while common::ECON1(self.read_control_register(common::Register::ECON1)?).txrts() == 1 {
-            }
-
-            // NOTE(volatile) to avoid this value being set *before* the transmission is over
-            let txnd = self.txnd;
-            unsafe { ptr::write_volatile(&mut self.txnd, NONE) }
-
-            // read the transmit status vector
-            let mut tx_stat = [0; 7];
-            self.read_buffer_memory(Some(txnd + 1), &mut tx_stat)?;
-
-            let stat = common::ESTAT(self.read_control_register(common::Register::ESTAT)?);
-
-            if stat.txabrt() == 1 {
-                // work around errata issue 12 by reading the transmit status vector
-                if stat.latecol() == 1 || (tx_stat[2] & (1 << 5)) != 0 {
-                    Err(Error::LateCollision)
-                } else {
-                    // TODO check for other error conditions
-                    unimplemented!()
-                }
-            } else {
-                Ok(())
-            }
+    /// NOTE: The returned packet *must* be `read` or `ignore`-d, otherwise this method will always
+    /// return `None` on subsequent invocations
+    pub fn next_packet(&mut self) -> Result<Option<Packet<'_, SPI, NCS, INT, RESET>>, E> {
+        if self.pending {
+            Ok(None)
+        } else if self.read_control_register(bank1::Register::EPKTCNT)? == 0 {
+            // Errata #6: we can't rely on PKTIF so we check PKTCNT
+            Ok(None)
         } else {
-            Ok(())
+            self.pending = true;
+
+            let curr_packet = self.next_packet;
+
+            // read out the first 6 bytes
+            let mut temp_buf = [0; 6];
+            self.read_buffer_memory(Some(curr_packet), &mut temp_buf)?;
+
+            // next packet pointer
+            let next_packet = u16::from_parts(temp_buf[0], temp_buf[1]);
+            debug_assert!(next_packet <= self.rxnd);
+
+            // status vector
+            let status = RxStatus(LE::read_u32(&temp_buf[2..]));
+            let len = status.byte_count() as u16 - CRC_SZ;
+
+            Ok(Some(Packet {
+                enc28j60: self,
+                next_packet,
+                len,
+            }))
         }
-    }
-
-    /// Copies a received frame into the specified `buffer`
-    ///
-    /// Returns the size of the frame
-    ///
-    /// **NOTE** If there's no pending packet this method will *block* until a new packet arrives
-    pub fn receive(&mut self, buffer: &mut [u8]) -> Result<u16, E> {
-        // Busy wait for a packet
-        loop {
-            let eir = common::EIR(self.read_control_register(common::Register::EIR)?);
-
-            // TODO check for error conditions
-            debug_assert!(eir.rxerif() == 0);
-
-            if eir.pktif() == 1 {
-                break;
-            }
-        }
-
-        // prepare to read buffer memory
-        let curr_packet = if self.next_packet == NONE {
-            RXST
-        } else {
-            self.next_packet
-        };
-
-        // read out the first 6 bytes
-        let mut temp_buf: [u8; 6] = unsafe { mem::uninitialized() };
-        self.read_buffer_memory(Some(curr_packet), &mut temp_buf)?;
-
-        // next packet pointer
-        let next_packet = u16::from_parts(temp_buf[0], temp_buf[1]);
-        self.next_packet = next_packet;
-
-        // status vector
-        let status = RxStatus(LE::read_u32(&temp_buf[2..]));
-
-        let n = status.byte_count() as u16;
-        // NOTE exclude the CRC (4 bytes)
-        let end = n - Self::CRC_SZ;
-        self.read_buffer_memory(None, &mut buffer[..usize(end)])?;
-
-        // update ERXRDPT
-        // due to Errata issue 11 we must write an odd address to ERXRDPT
-        // we know that ERXST = 0, that ERXND is odd and that next_packet is even
-        let rxrdpt = next_packet.checked_sub(1).unwrap_or(self.rxnd);
-        self.write_control_register(bank0::Register::ERXRDPTL, rxrdpt.low())?;
-        self.write_control_register(bank0::Register::ERXRDPTH, rxrdpt.high())?;
-
-        // decrease the packet count
-        self.write_control_register(
-            common::Register::ECON2,
-            common::ECON2::default().pktdec(1).bits(),
-        )?;
-
-        Ok(end)
     }
 
     /// Starts the transmission of `bytes`
@@ -374,15 +336,17 @@ where
     ///
     /// # Panics
     ///
-    /// If `bytes` length is greater than 1514, the maximum frame length allowed by the interface.
+    /// If `bytes` length is greater than 1514, the maximum frame length allowed by the interface,
+    /// or greater than the transmit buffer
     pub fn transmit(&mut self, bytes: &[u8]) -> Result<(), Error<E>> {
-        assert!(bytes.len() <= usize(Self::MAX_FRAME_LENGTH - Self::CRC_SZ));
-
-        self.flush()?;
+        assert!(
+            bytes.len() <= usize(MAX_FRAME_LENGTH - CRC_SZ)
+                && bytes.len() <= usize(BUF_SZ - self.rxnd - 1)
+        );
 
         let txst = self.txst();
 
-        // work around errata issue 10 by resetting the transmit logic before any every new
+        // work around errata #12 by resetting the transmit logic before every new
         // transmission
         self.bit_field_set(common::Register::ECON1, common::ECON1::mask().txrst())?;
         self.bit_field_clear(common::Register::ECON1, common::ECON1::mask().txrst())?;
@@ -391,7 +355,7 @@ where
             mask.txerif() | mask.txif()
         })?;
 
-        // NOTE the plus one is to not override the per packet control byte
+        // NOTE the plus one is to not overwrite the per packet control byte
         let wrpt = txst + 1;
 
         // 1. ETXST was set during initialization
@@ -399,7 +363,7 @@ where
         // 2. write the frame to the IC memory
         self.write_buffer_memory(Some(wrpt), bytes)?;
 
-        let txnd = wrpt + u16(bytes.len()).unwrap() - 1;
+        let txnd = wrpt + bytes.len() as u16 - 1;
 
         // 3. Set the end address of the transmit buffer
         self.write_control_register(bank0::Register::ETXNDL, txnd.low())?;
@@ -411,24 +375,151 @@ where
         // 5. start transmission
         self.bit_field_set(common::Register::ECON1, common::ECON1::mask().txrts())?;
 
-        // NOTE(volatile) to avoid this value being set *before* the transmission is started
-        unsafe { ptr::write_volatile(&mut self.txnd, txnd) }
+        // Wait until transmission finishes
+        while common::ECON1(self.read_control_register(common::Register::ECON1)?).txrts() == 1 {}
 
-        Ok(())
+        // read the transmit status vector
+        let mut tx_stat = [0; 7];
+        self.read_buffer_memory(None, &mut tx_stat)?;
+
+        let stat = common::ESTAT(self.read_control_register(common::Register::ESTAT)?);
+
+        if stat.txabrt() == 1 {
+            // work around errata #12 by reading the transmit status vector
+            if stat.latecol() == 1 || (tx_stat[2] & (1 << 5)) != 0 {
+                Err(Error::LateCollision)
+            } else {
+                Err(Error::TransmitAbort)
+            }
+        } else {
+            Ok(())
+        }
     }
 
     /* Miscellaneous */
-    /// Destroys the driver and returns all the hardware resources that were owned by it
-    pub fn free(self) -> (SPI, NCS, INT, RESET) {
-        (self.spi, self.ncs, self.int, self.reset)
-    }
-
     /// Returns the number of packets that have been received but have not been processed yet
     pub fn pending_packets(&mut self) -> Result<u8, E> {
         self.read_control_register(bank1::Register::EPKTCNT)
     }
 
     /* Private */
+    /* Read */
+    fn read_control_register<R>(&mut self, register: R) -> Result<u8, E>
+    where
+        R: Into<Register>,
+    {
+        self._read_control_register(register.into())
+    }
+
+    fn _read_control_register(&mut self, register: Register) -> Result<u8, E> {
+        self.change_bank(register)?;
+
+        self.ncs.set_low();
+        let mut buffer = [Instruction::RCR.opcode() | register.addr(), 0];
+        self.spi.transfer(&mut buffer)?;
+        self.ncs.set_high();
+
+        Ok(buffer[1])
+    }
+
+    #[allow(dead_code)]
+    fn read_phy_register(&mut self, register: phy::Register) -> Result<u16, E> {
+        // set PHY register address
+        self.write_control_register(bank2::Register::MIREGADR, register.addr())?;
+
+        // start read operation
+        self.bit_field_set(bank2::Register::MICMD, bank2::MICMD::mask().miird())?;
+
+        // wait until the read operation finishes
+        while self.read_control_register(bank3::Register::MISTAT)? & 0b1 != 0 {}
+
+        self.bit_field_clear(bank2::Register::MICMD, bank2::MICMD::mask().miird())?;
+
+        Ok(
+            ((self.read_control_register(bank2::Register::MIRDH)? as u16) << 8)
+                | (self.read_control_register(bank2::Register::MIRDL)? as u16),
+        )
+    }
+
+    /* Write */
+    fn _write_control_register(&mut self, register: Register, value: u8) -> Result<(), E> {
+        self.change_bank(register)?;
+
+        self.ncs.set_low();
+        let buffer = [Instruction::WCR.opcode() | register.addr(), value];
+        self.spi.write(&buffer)?;
+        self.ncs.set_high();
+
+        Ok(())
+    }
+
+    fn write_control_register<R>(&mut self, register: R, value: u8) -> Result<(), E>
+    where
+        R: Into<Register>,
+    {
+        self._write_control_register(register.into(), value)
+    }
+
+    fn write_phy_register(&mut self, register: phy::Register, value: u16) -> Result<(), E> {
+        // set PHY register address
+        self.write_control_register(bank2::Register::MIREGADR, register.addr())?;
+
+        self.write_control_register(bank2::Register::MIWRL, (value & 0xff) as u8)?;
+        // this starts the write operation
+        self.write_control_register(bank2::Register::MIWRH, (value >> 8) as u8)?;
+
+        // wait until the write operation finishes
+        while self.read_control_register(bank3::Register::MISTAT)? & 0b1 != 0 {}
+
+        Ok(())
+    }
+
+    /* RMW */
+    fn modify_control_register<R, F>(&mut self, register: R, f: F) -> Result<(), E>
+    where
+        F: FnOnce(u8) -> u8,
+        R: Into<Register>,
+    {
+        self._modify_control_register(register.into(), f)
+    }
+
+    fn _modify_control_register<F>(&mut self, register: Register, f: F) -> Result<(), E>
+    where
+        F: FnOnce(u8) -> u8,
+    {
+        let r = self._read_control_register(register)?;
+        self._write_control_register(register, f(r))
+    }
+
+    /* Auxiliary */
+    fn change_bank(&mut self, register: Register) -> Result<(), E> {
+        let bank = register.bank();
+
+        if let Some(bank) = bank {
+            if self.bank == bank {
+                // already on the register bank
+                return Ok(());
+            }
+
+            // change bank
+            self.bank = bank;
+            match bank {
+                Bank::Bank0 => self.bit_field_clear(common::Register::ECON1, 0b11),
+                Bank::Bank1 => {
+                    self.modify_control_register(common::Register::ECON1, |r| (r & !0b11) | 0b01)
+                }
+                Bank::Bank2 => {
+                    self.modify_control_register(common::Register::ECON1, |r| (r & !0b11) | 0b10)
+                }
+                Bank::Bank3 => self.bit_field_set(common::Register::ECON1, 0b11),
+            }
+        } else {
+            // common register
+            Ok(())
+        }
+    }
+
+    /* Primitive operations */
     fn bit_field_clear<R>(&mut self, register: R, mask: u8) -> Result<(), E>
     where
         R: Into<Register>,
@@ -469,59 +560,6 @@ where
         Ok(())
     }
 
-    fn modify_control_register<R, F>(&mut self, register: R, f: F) -> Result<(), E>
-    where
-        F: FnOnce(u8) -> u8,
-        R: Into<Register>,
-    {
-        self._modify_control_register(register.into(), f)
-    }
-
-    fn _modify_control_register<F>(&mut self, register: Register, f: F) -> Result<(), E>
-    where
-        F: FnOnce(u8) -> u8,
-    {
-        let r = self._read_control_register(register)?;
-        self._write_control_register(register, f(r))
-    }
-
-    fn read_control_register<R>(&mut self, register: R) -> Result<u8, E>
-    where
-        R: Into<Register>,
-    {
-        self._read_control_register(register.into())
-    }
-
-    fn _read_control_register(&mut self, register: Register) -> Result<u8, E> {
-        self.change_bank(register)?;
-
-        self.ncs.set_low();
-        let mut buffer = [Instruction::RCR.opcode() | register.addr(), 0];
-        self.spi.transfer(&mut buffer)?;
-        self.ncs.set_high();
-
-        Ok(buffer[1])
-    }
-
-    #[allow(dead_code)]
-    fn read_phy_register(&mut self, register: phy::Register) -> Result<u16, E> {
-        // set PHY register address
-        self.write_control_register(bank2::Register::MIREGADR, register.addr())?;
-
-        // start read operation
-        self.bit_field_set(bank2::Register::MICMD, bank2::MICMD::mask().miird())?;
-
-        // wait until the read operation finishes
-        while self.read_control_register(bank3::Register::MISTAT)? & 0b1 != 0 {}
-
-        self.bit_field_clear(bank2::Register::MICMD, bank2::MICMD::mask().miird())?;
-
-        Ok(
-            ((self.read_control_register(bank2::Register::MIRDH)? as u16) << 8)
-                | (self.read_control_register(bank2::Register::MIRDL)? as u16),
-        )
-    }
-
     fn read_buffer_memory(&mut self, addr: Option<u16>, buf: &mut [u8]) -> Result<(), E> {
         if let Some(addr) = addr {
             self.write_control_register(bank0::Register::ERDPTL, addr.low())?;
@@ -531,6 +569,14 @@ where
         self.ncs.set_low();
         self.spi.write(&[Instruction::RBM.opcode()])?;
         self.spi.transfer(buf)?;
+        self.ncs.set_high();
+
+        Ok(())
+    }
+
+    fn soft_reset(&mut self) -> Result<(), E> {
+        self.ncs.set_low();
+        self.spi.transfer(&mut [Instruction::SRC.opcode()])?;
         self.ncs.set_high();
 
         Ok(())
@@ -548,73 +594,12 @@ where
         self.ncs.set_high();
         Ok(())
     }
+}
 
-    fn write_control_register<R>(&mut self, register: R, value: u8) -> Result<(), E>
-    where
-        R: Into<Register>,
-    {
-        self._write_control_register(register.into(), value)
-    }
-
-    fn _write_control_register(&mut self, register: Register, value: u8) -> Result<(), E> {
-        self.change_bank(register)?;
-
-        self.ncs.set_low();
-        let buffer = [Instruction::WCR.opcode() | register.addr(), value];
-        self.spi.write(&buffer)?;
-        self.ncs.set_high();
-
-        Ok(())
-    }
-
-    fn write_phy_register(&mut self, register: phy::Register, value: u16) -> Result<(), E> {
-        // set PHY register address
-        self.write_control_register(bank2::Register::MIREGADR, register.addr())?;
-
-        self.write_control_register(bank2::Register::MIWRL, (value & 0xff) as u8)?;
-        // this starts the write operation
-        self.write_control_register(bank2::Register::MIWRH, (value >> 8) as u8)?;
-
-        // XXX should we not block until the write operation finishes
-        // wait until the write operation finishes
-        while self.read_control_register(bank3::Register::MISTAT)? & 0b1 != 0 {}
-
-        Ok(())
-    }
-
-    fn change_bank(&mut self, register: Register) -> Result<(), E> {
-        let bank = register.bank();
-
-        if let Some(bank) = bank {
-            if self.bank == bank {
-                // already on the register bank
-                return Ok(());
-            }
-
-            // change bank
-            self.bank = bank;
-            match bank {
-                Bank::Bank0 => self.bit_field_clear(common::Register::ECON1, 0b11),
-                Bank::Bank1 => {
-                    self.modify_control_register(common::Register::ECON1, |r| (r & !0b11) | 0b01)
-                }
-                Bank::Bank2 => {
-                    self.modify_control_register(common::Register::ECON1, |r| (r & !0b11) | 0b10)
-                }
-                Bank::Bank3 => self.bit_field_set(common::Register::ECON1, 0b11),
-            }
-        } else {
-            // common register
-            Ok(())
-        }
-    }
-
-    fn soft_reset(&mut self) -> Result<(), E> {
-        self.ncs.set_low();
-        self.spi.transfer(&mut [Instruction::SRC.opcode()])?;
-        self.ncs.set_high();
-
-        Ok(())
+impl<SPI, NCS, INT, RESET> Enc28j60<SPI, NCS, INT, RESET> {
+    /// Destroys the driver and returns all the hardware resources that were owned by it
+    pub fn free(self) -> (SPI, NCS, INT, RESET) {
+        (self.spi, self.ncs, self.int, self.reset)
     }
 
     fn txst(&self) -> u16 {
@@ -626,8 +611,7 @@ impl<E, SPI, NCS, INT, RESET> Enc28j60<SPI, NCS, INT, RESET>
 where
     SPI: blocking::spi::Transfer<u8, Error = E> + blocking::spi::Write<u8, Error = E>,
     NCS: OutputPin,
-    INT: IntPin + InputPin,
-    RESET: ResetPin,
+    INT: crate::sealed::IntPin + InputPin,
 {
     /// Starts listening for the specified event
     pub fn listen(&mut self, event: Event) -> Result<(), E> {
@@ -649,21 +633,72 @@ where
     }
 }
 
+/// A packet that has not been read yet
+pub struct Packet<'a, SPI, NCS, INT, RESET> {
+    enc28j60: &'a mut Enc28j60<SPI, NCS, INT, RESET>,
+    next_packet: u16,
+    len: u16,
+}
+
+impl<'a, E, SPI, NCS, INT, RESET> Packet<'a, SPI, NCS, INT, RESET>
+where
+    SPI: blocking::spi::Transfer<u8, Error = E> + blocking::spi::Write<u8, Error = E>,
+    NCS: OutputPin,
+{
+    /// Size of this packet
+    pub fn len(&self) -> u16 {
+        self.len
+    }
+
+    /// Ignores this packet
+    pub fn ignore(self) -> Result<(), E> {
+        // update ERXRDPT
+        // due to Errata #14 we must write an odd address to ERXRDPT
+        // we know that ERXST = 0, that ERXND is odd and that next_packet is even
+        let rxrdpt = if self.next_packet < 1 || self.next_packet > self.enc28j60.rxnd + 1 {
+            self.enc28j60.rxnd
+        } else {
+            self.next_packet - 1
+        };
+        // "To move ERXRDPT, the host controller must write to ERXRDPTL first."
+        self.enc28j60
+            .write_control_register(bank0::Register::ERXRDPTL, rxrdpt.low())?;
+        self.enc28j60
+            .write_control_register(bank0::Register::ERXRDPTH, rxrdpt.high())?;
+
+        // decrease the packet count
+        self.enc28j60
+            .bit_field_set(common::Register::ECON2, common::ECON2::mask().pktdec())?;
+
+        self.enc28j60.pending = false;
+        self.enc28j60.next_packet = self.next_packet;
+
+        Ok(())
+    }
+
+    /// Reads the packet data into the given `buffer`
+    pub fn read<B>(self, buffer: B) -> Result<B::SliceTo, E>
+    where
+        B: IntoSliceTo<u16, Element = u8>,
+        B::SliceTo: AsMutSlice<Element = u8>,
+    {
+        assert!(buffer.as_slice().len() >= usize(self.len()));
+
+        let mut b = buffer.into_slice_to(self.len());
+        self.enc28j60.read_buffer_memory(None, b.as_mut_slice())?;
+
+        self.ignore().map(move |_| b)
+    }
+}
+
 /// Reset pin or interrupt pin left unconnected
 pub struct Unconnected;
 
-// FIXME this should be a closed set trait
-/// [Implementation detail] Reset pin
-pub unsafe trait ResetPin: 'static {
-    #[doc(hidden)]
-    fn reset(&mut self);
-}
-
-unsafe impl ResetPin for Unconnected {
+impl crate::sealed::ResetPin for Unconnected {
     fn reset(&mut self) {}
 }
 
-unsafe impl<OP> ResetPin for OP
+impl<OP> crate::sealed::ResetPin for OP
 where
     OP: OutputPin + 'static,
 {
@@ -673,13 +708,9 @@ where
     }
 }
 
-// FIXME this should be a closed set trait
-/// [Implementation detail] Interrupt pin
-pub unsafe trait IntPin: 'static {}
+impl crate::sealed::IntPin for Unconnected {}
 
-unsafe impl IntPin for Unconnected {}
-
-unsafe impl<IP> IntPin for IP where IP: InputPin + 'static {}
+impl<IP> crate::sealed::IntPin for IP where IP: InputPin + 'static {}
 
 #[derive(Clone, Copy, PartialEq)]
 enum Bank {

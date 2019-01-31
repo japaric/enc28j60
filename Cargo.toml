@@ -3,12 +3,16 @@ authors = ["Jorge Aparicio <jorge@japaric.io>"]
 categories = ["embedded", "hardware-support", "no-std"]
 description = "A platform agnostic driver to interface the ENC28J60 (Ethernet controller)"
 documentation = "https://docs.rs/enc28j60"
+edition = "2018"
 keywords = ["embedded-hal-driver", "Ethernet", "SPI"]
 license = "MIT OR Apache-2.0"
 name = "enc28j60"
 readme = "README.md"
 repository = "https://github.com/japaric/enc28j60"
-version = "0.2.1"
+version = "0.3.0"
+
+[dependencies]
+as-slice = "0.1.0"
 
 [dependencies.cast]
 default-features = false
@@ -21,3 +25,6 @@ features = ["unproven"]
 [dependencies.byteorder]
 default-features = false
 version = "1.2.1"
+
+[dependencies.owning-slice]
+git = "https://github.com/japaric/owning-slice"
