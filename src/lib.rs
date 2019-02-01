@@ -71,12 +71,19 @@ const CRC_SZ: u16 = 4;
 pub enum Error<E> {
     /// Late collision
     LateCollision,
+
     /// EREVID read as zero; this means that the device is not an ENC28J60 or that it has locked up
     ErevidIsZero,
+
     /// Transmission was aborted
     TransmitAbort,
+
+    /// The RX buffer has become corrupted
+    CorruptRxBuffer,
+
     /// SPI error
     Spi(E),
+
     #[doc(hidden)]
     #[allow(non_camel_case_types)]
     _DO_NOT_MATCH_AGAINST_THIS_VARIANT,
@@ -295,7 +302,9 @@ where
     /// Flushes the transmit buffer, ensuring all pending transmissions have completed
     /// NOTE: The returned packet *must* be `read` or `ignore`-d, otherwise this method will always
     /// return `None` on subsequent invocations
-    pub fn next_packet(&mut self) -> Result<Option<NextPacket<'_, SPI, NCS, INT, RESET>>, E> {
+    pub fn next_packet(
+        &mut self,
+    ) -> Result<Option<NextPacket<'_, SPI, NCS, INT, RESET>>, Error<E>> {
         if self.pending {
             Ok(None)
         } else if self.pending_packets()? == 0 {
@@ -312,11 +321,17 @@ where
 
             // next packet pointer
             let next_packet = u16::from_parts(temp_buf[0], temp_buf[1]);
-            debug_assert!(next_packet <= self.rxnd);
+            if next_packet > self.rxnd {
+                return Err(Error::CorruptRxBuffer);
+            }
 
             // status vector
             let status = RxStatus(LE::read_u32(&temp_buf[2..]));
             let len = status.byte_count() as u16 - CRC_SZ;
+
+            if len > self.rxnd {
+                return Err(Error::CorruptRxBuffer);
+            }
 
             Ok(Some(NextPacket {
                 enc28j60: self,
@@ -414,7 +429,7 @@ where
                 #[cfg(debug_assertions)]
                 _ => unreachable!(),
                 #[cfg(not(debug_assertions))]
-                _ => {},
+                _ => {}
             }
         }
 
@@ -433,7 +448,7 @@ where
                 #[cfg(debug_assertions)]
                 _ => unreachable!(),
                 #[cfg(not(debug_assertions))]
-                _ => {},
+                _ => {}
             }
         }
 
