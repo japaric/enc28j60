@@ -295,10 +295,10 @@ where
     /// Flushes the transmit buffer, ensuring all pending transmissions have completed
     /// NOTE: The returned packet *must* be `read` or `ignore`-d, otherwise this method will always
     /// return `None` on subsequent invocations
-    pub fn next_packet(&mut self) -> Result<Option<Packet<'_, SPI, NCS, INT, RESET>>, E> {
+    pub fn next_packet(&mut self) -> Result<Option<NextPacket<'_, SPI, NCS, INT, RESET>>, E> {
         if self.pending {
             Ok(None)
-        } else if self.read_control_register(bank1::Register::EPKTCNT)? == 0 {
+        } else if self.pending_packets()? == 0 {
             // Errata #6: we can't rely on PKTIF so we check PKTCNT
             Ok(None)
         } else {
@@ -318,7 +318,7 @@ where
             let status = RxStatus(LE::read_u32(&temp_buf[2..]));
             let len = status.byte_count() as u16 - CRC_SZ;
 
-            Ok(Some(Packet {
+            Ok(Some(NextPacket {
                 enc28j60: self,
                 next_packet,
                 len,
@@ -400,6 +400,44 @@ where
     /// Returns the number of packets that have been received but have not been processed yet
     pub fn pending_packets(&mut self) -> Result<u8, E> {
         self.read_control_register(bank1::Register::EPKTCNT)
+    }
+
+    /// Adjusts the receive filter to *accept* these packet types
+    pub fn accept(&mut self, packets: &[Packet]) -> Result<(), E> {
+        let mask = bank1::ERXFCON::mask();
+        let mut val = 0;
+        for packet in packets {
+            match packet {
+                Packet::Broadcast => val |= mask.bcen(),
+                Packet::Multicast => val |= mask.mcen(),
+                Packet::Unicast => val |= mask.ucen(),
+                #[cfg(debug_assertions)]
+                _ => unreachable!(),
+                #[cfg(not(debug_assertions))]
+                _ => {},
+            }
+        }
+
+        self.bit_field_set(bank1::Register::ERXFCON, val)
+    }
+
+    /// Adjusts the receive filter to *ignore* these packet types
+    pub fn ignore(&mut self, packets: &[Packet]) -> Result<(), E> {
+        let mask = bank1::ERXFCON::mask();
+        let mut val = 0;
+        for packet in packets {
+            match packet {
+                Packet::Broadcast => val |= mask.bcen(),
+                Packet::Multicast => val |= mask.mcen(),
+                Packet::Unicast => val |= mask.ucen(),
+                #[cfg(debug_assertions)]
+                _ => unreachable!(),
+                #[cfg(not(debug_assertions))]
+                _ => {},
+            }
+        }
+
+        self.bit_field_clear(bank1::Register::ERXFCON, val)
     }
 
     /* Private */
@@ -528,7 +566,7 @@ where
     }
 
     fn _bit_field_clear(&mut self, register: Register, mask: u8) -> Result<(), E> {
-        assert!(register.is_eth_register());
+        debug_assert!(register.is_eth_register());
 
         self.change_bank(register)?;
 
@@ -548,7 +586,7 @@ where
     }
 
     fn _bit_field_set(&mut self, register: Register, mask: u8) -> Result<(), E> {
-        assert!(register.is_eth_register());
+        debug_assert!(register.is_eth_register());
 
         self.change_bank(register)?;
 
@@ -634,13 +672,13 @@ where
 }
 
 /// A packet that has not been read yet
-pub struct Packet<'a, SPI, NCS, INT, RESET> {
+pub struct NextPacket<'a, SPI, NCS, INT, RESET> {
     enc28j60: &'a mut Enc28j60<SPI, NCS, INT, RESET>,
     next_packet: u16,
     len: u16,
 }
 
-impl<'a, E, SPI, NCS, INT, RESET> Packet<'a, SPI, NCS, INT, RESET>
+impl<'a, E, SPI, NCS, INT, RESET> NextPacket<'a, SPI, NCS, INT, RESET>
 where
     SPI: blocking::spi::Transfer<u8, Error = E> + blocking::spi::Write<u8, Error = E>,
     NCS: OutputPin,
@@ -677,6 +715,10 @@ where
     }
 
     /// Reads the packet data into the given `buffer`
+    ///
+    /// # Panics
+    ///
+    /// If `self.len()` is greater than `buffer.len()`
     pub fn read<B>(self, buffer: B) -> Result<B::SliceTo, E>
     where
         B: IntoSliceTo<u16, Element = u8>,
@@ -711,6 +753,20 @@ where
 impl crate::sealed::IntPin for Unconnected {}
 
 impl<IP> crate::sealed::IntPin for IP where IP: InputPin + 'static {}
+
+/// Packet type, used to configure receive filters
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub enum Packet {
+    /// Broadcast packets
+    Broadcast,
+    /// Multicast packets
+    Multicast,
+    /// Unicast packets
+    Unicast,
+    #[doc(hidden)]
+    #[allow(non_camel_case_types)]
+    _DO_NOT_MATCH_AGAINST_THIS_VARIANT,
+}
 
 #[derive(Clone, Copy, PartialEq)]
 enum Bank {
