@@ -24,7 +24,7 @@
 #![deny(warnings)]
 #![no_std]
 
-use core::u16;
+use core::{cmp, u16};
 
 use as_slice::AsMutSlice;
 use byteorder::{ByteOrder, LE};
@@ -354,10 +354,7 @@ where
     /// If `bytes` length is greater than 1514, the maximum frame length allowed by the interface,
     /// or greater than the transmit buffer
     pub fn transmit(&mut self, bytes: &[u8]) -> Result<(), Error<E>> {
-        assert!(
-            bytes.len() <= usize(MAX_FRAME_LENGTH - CRC_SZ)
-                && bytes.len() <= usize(BUF_SZ - self.rxnd - 1)
-        );
+        assert!(bytes.len() <= usize(self.mtu()));
 
         let txst = self.txst();
 
@@ -409,6 +406,14 @@ where
         } else {
             Ok(())
         }
+    }
+
+    /// Returns the interface Maximum Transmission Unit (MTU)
+    ///
+    /// The value returned by this function will never exceed 1514 bytes. The actual value depends
+    /// on the memory assigned to the transmission buffer when initializing the device
+    pub fn mtu(&self) -> u16 {
+        cmp::min(BUF_SZ - self.rxnd - 1, MAX_FRAME_LENGTH - CRC_SZ)
     }
 
     /* Miscellaneous */
