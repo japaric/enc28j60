@@ -49,6 +49,9 @@ mod phy;
 mod sealed;
 mod traits;
 
+#[cfg(feature = "smoltcp")]
+pub mod smoltcp_phy;
+
 /// SPI mode
 pub const MODE: Mode = Mode {
     phase: Phase::CaptureOnFirstTransition,

@@ -16,30 +16,18 @@
 #![no_std]
 #![no_main]
 
-extern crate cortex_m;
-extern crate cortex_m_rt as rt;
-extern crate embedded_hal;
-extern crate enc28j60;
 extern crate panic_semihosting;
-extern crate smoltcp;
-extern crate stm32f1xx_hal as hal;
 
 use core::fmt::Write;
-use embedded_hal::digital::OutputPin;
-use enc28j60::Enc28j60;
-use hal::delay::Delay;
-use hal::device;
-use hal::prelude::*;
-use hal::serial::Serial;
-use hal::spi::Spi;
-use rt::entry;
-
-use smoltcp::iface::{EthernetInterfaceBuilder, NeighborCache};
-use smoltcp::phy::{self, Device, DeviceCapabilities};
-use smoltcp::socket::{SocketSet, TcpSocket, TcpSocketBuffer};
-use smoltcp::time::Instant;
-use smoltcp::wire::{EthernetAddress, IpAddress, IpCidr, Ipv4Address};
-use smoltcp::Result;
+use cortex_m_rt::entry;
+use enc28j60::{smoltcp_phy::Phy, Enc28j60};
+use smoltcp::{
+    iface::{EthernetInterfaceBuilder, NeighborCache},
+    socket::{SocketSet, TcpSocket, TcpSocketBuffer},
+    time::Instant,
+    wire::{EthernetAddress, IpAddress, IpCidr, Ipv4Address},
+};
+use stm32f1xx_hal::{delay::Delay, device, prelude::*, serial::Serial, spi::Spi};
 
 /* Constants */
 const KB: u16 = 1024; // bytes
@@ -116,9 +104,12 @@ fn main() -> ! {
     .unwrap();
     writeln!(serial, "enc26j60 initialized").unwrap();
 
-    let mut eth = EncPhy::new(enc28j60);
+    // PHY Wrapper
+    let mut buf = [0u8; 1024];
+    let mut eth = Phy::new(enc28j60, &mut buf);
     writeln!(serial, "eth initialized").unwrap();
 
+    // Ethernet interface
     let local_addr = Ipv4Address::new(192, 168, 1, 2);
     let ip_addr = IpCidr::new(IpAddress::from(local_addr), 24);
     let mut ip_addrs = [ip_addr];
@@ -132,6 +123,7 @@ fn main() -> ! {
         .finalize();
     writeln!(serial, "iface initialized").unwrap();
 
+    // Sockets
     let mut server_rx_buffer = [0; 2048];
     let mut server_tx_buffer = [0; 2048];
     let server_socket = TcpSocket::new(
@@ -146,9 +138,6 @@ fn main() -> ! {
     // LED on after initialization
     led.set_low();
 
-    // FIXME some frames are lost when sent right after initialization
-    delay.delay_ms(100_u8);
-
     loop {
         match iface.poll(&mut sockets, Instant::from_millis(0)) {
             Ok(b) => {
@@ -159,8 +148,18 @@ fn main() -> ! {
                     }
 
                     if socket.can_send() {
-                        writeln!(serial, "tcp:80 send greeting").unwrap();
-                        write!(socket, "HTTP/1.1 200 OK\r\n\r\ntest string\n").unwrap();
+                        writeln!(serial, "tcp:80 send").unwrap();
+                        led.toggle();
+
+                        write!(
+                            socket,
+                            "HTTP/1.1 200 OK\r\n\r\nLED is currently: {}\n",
+                            match led.is_set_low() {
+                                true => "on",
+                                false => "off",
+                            }
+                        )
+                        .unwrap();
                         writeln!(serial, "tcp:80 close").unwrap();
                         socket.close();
                     }
@@ -170,120 +169,5 @@ fn main() -> ! {
                 writeln!(serial, "Error: {:?}", e).unwrap();
             }
         }
-    }
-}
-
-struct EncPhy {
-    inner: Enc28j60<
-        hal::spi::Spi<
-            hal::pac::SPI1,
-            (
-                hal::gpio::gpioa::PA5<hal::gpio::Alternate<hal::gpio::PushPull>>,
-                hal::gpio::gpioa::PA6<hal::gpio::Input<hal::gpio::Floating>>,
-                hal::gpio::gpioa::PA7<hal::gpio::Alternate<hal::gpio::PushPull>>,
-            ),
-        >,
-        hal::gpio::gpioa::PA4<hal::gpio::Output<hal::gpio::PushPull>>,
-        enc28j60::Unconnected,
-        hal::gpio::gpioa::PA3<hal::gpio::Output<hal::gpio::PushPull>>,
-    >,
-    rxbuf: [u8; 1024],
-}
-
-impl EncPhy {
-    pub fn new(
-        inner: Enc28j60<
-            hal::spi::Spi<
-                hal::pac::SPI1,
-                (
-                    hal::gpio::gpioa::PA5<hal::gpio::Alternate<hal::gpio::PushPull>>,
-                    hal::gpio::gpioa::PA6<hal::gpio::Input<hal::gpio::Floating>>,
-                    hal::gpio::gpioa::PA7<hal::gpio::Alternate<hal::gpio::PushPull>>,
-                ),
-            >,
-            hal::gpio::gpioa::PA4<hal::gpio::Output<hal::gpio::PushPull>>,
-            enc28j60::Unconnected,
-            hal::gpio::gpioa::PA3<hal::gpio::Output<hal::gpio::PushPull>>,
-        >,
-    ) -> Self {
-        EncPhy {
-            inner,
-            rxbuf: [0u8; 1024],
-        }
-    }
-}
-
-impl<'a, 'b> Device<'a> for &'b mut EncPhy {
-    type RxToken = PhyRxToken<'a>;
-    type TxToken = PhyTxToken<'a>;
-
-    fn receive(&'a mut self) -> Option<(Self::RxToken, Self::TxToken)> {
-        let packet = self.inner.next_packet().unwrap();
-        match packet {
-            Some(packet) => {
-                packet.read(&mut self.rxbuf[..]).unwrap();
-                Some((
-                    PhyRxToken(&mut self.rxbuf[..]),
-                    PhyTxToken {
-                        enc28j60: &mut self.inner,
-                        txbuf: [0u8; 1024],
-                    },
-                ))
-            }
-            None => None,
-        }
-    }
-
-    fn transmit(&'a mut self) -> Option<Self::TxToken> {
-        Some(PhyTxToken {
-            enc28j60: &mut self.inner,
-            txbuf: [0u8; 1024],
-        })
-    }
-
-    fn capabilities(&self) -> DeviceCapabilities {
-        let mut caps = DeviceCapabilities::default();
-        caps.max_transmission_unit = 1500;
-        caps
-    }
-}
-
-struct PhyRxToken<'a>(&'a [u8]);
-
-impl<'a> phy::RxToken for PhyRxToken<'a> {
-    fn consume<R, F>(self, _timestamp: Instant, f: F) -> Result<R>
-    where
-        F: FnOnce(&[u8]) -> Result<R>,
-    {
-        let result = f(self.0);
-        result
-    }
-}
-
-struct PhyTxToken<'a> {
-    enc28j60: &'a mut enc28j60::Enc28j60<
-        hal::spi::Spi<
-            hal::pac::SPI1,
-            (
-                hal::gpio::gpioa::PA5<hal::gpio::Alternate<hal::gpio::PushPull>>,
-                hal::gpio::gpioa::PA6<hal::gpio::Input<hal::gpio::Floating>>,
-                hal::gpio::gpioa::PA7<hal::gpio::Alternate<hal::gpio::PushPull>>,
-            ),
-        >,
-        hal::gpio::gpioa::PA4<hal::gpio::Output<hal::gpio::PushPull>>,
-        enc28j60::Unconnected,
-        hal::gpio::gpioa::PA3<hal::gpio::Output<hal::gpio::PushPull>>,
-    >,
-    txbuf: [u8; 1024],
-}
-
-impl<'a> phy::TxToken for PhyTxToken<'a> {
-    fn consume<R, F>(mut self, _timestamp: Instant, len: usize, f: F) -> Result<R>
-    where
-        F: FnOnce(&mut [u8]) -> Result<R>,
-    {
-        let result = f(&mut self.txbuf[..len]);
-        self.enc28j60.transmit(&self.txbuf[..len]).unwrap();
-        result
     }
 }
