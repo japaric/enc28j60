@@ -1,17 +1,15 @@
-//! ENC28J60 demo: pong server + UDP echo server
+//! ENC28J60 + smoltcp demo
 //!
-//! This program:
+//! Demonstrates how to use an ENC28J60 with smoltcp by running a simple demo that
+//! toggles and returns the current LED state.
 //!
-//! - Responds to ARP requests
-//! - Responds to ICMP echo requests, thus you can `ping` the device
-//! - Responds to *all* UDP datagrams by sending them back
+//! You can test this program with the following:
 //!
-//! You can test this program by running the following commands:
-//!
-//! - `ping 192.168.1.33`. The device should respond and toggle the state of the LED on every `ping`
-//! request.
-//! - `nc -u 192.168.1.33 1337` and sending any string. The device should respond back by sending
-//! back the received string; the LED will toggle each time a UDP datagram is sent.
+//! - `ping 192.168.1.2`. The device will respond to every request (response time should be ~10ms).
+//! - `curl 192.168.1.2`. The device will respond with a HTTP response with the current
+//! LED state in the body.
+//! - Visiting `https://192.168.1.2/`. Every refresh will toggle the LED and the page will
+//! reflect the current state.
 //!
 #![no_std]
 #![no_main]
@@ -29,8 +27,6 @@ use smoltcp::{
 };
 use stm32f1xx_hal::{delay::Delay, device, prelude::*, serial::Serial, spi::Spi};
 
-/* Constants */
-const KB: u16 = 1024; // bytes
 const SRC_MAC: [u8; 6] = [0x20, 0x18, 0x03, 0x01, 0x00, 0x00];
 
 #[entry]
@@ -71,37 +67,43 @@ fn main() -> ! {
     writeln!(serial, "serial start").unwrap();
 
     // SPI
-    let mut ncs = gpioa.pa4.into_push_pull_output(&mut gpioa.crl);
-    ncs.set_high();
-    let sck = gpioa.pa5.into_alternate_push_pull(&mut gpioa.crl);
-    let miso = gpioa.pa6;
-    let mosi = gpioa.pa7.into_alternate_push_pull(&mut gpioa.crl);
-    let spi = Spi::spi1(
-        dp.SPI1,
-        (sck, miso, mosi),
-        &mut afio.mapr,
-        enc28j60::MODE,
-        1.mhz(),
-        clocks,
-        &mut rcc.apb2,
-    );
+    let spi = {
+        let sck = gpioa.pa5.into_alternate_push_pull(&mut gpioa.crl);
+        let miso = gpioa.pa6;
+        let mosi = gpioa.pa7.into_alternate_push_pull(&mut gpioa.crl);
+
+        Spi::spi1(
+            dp.SPI1,
+            (sck, miso, mosi),
+            &mut afio.mapr,
+            enc28j60::MODE,
+            1.mhz(),
+            clocks,
+            &mut rcc.apb2,
+        )
+    };
     writeln!(serial, "spi initialized").unwrap();
 
     // ENC28J60
-    let mut reset = gpioa.pa3.into_push_pull_output(&mut gpioa.crl);
-    reset.set_high();
-    let mut delay = Delay::new(cp.SYST, clocks);
-    let enc28j60 = Enc28j60::new(
-        spi,
-        ncs,
-        enc28j60::Unconnected,
-        reset,
-        &mut delay,
-        7 * KB,
-        SRC_MAC,
-    )
-    .ok()
-    .unwrap();
+    let enc28j60 = {
+        let mut ncs = gpioa.pa4.into_push_pull_output(&mut gpioa.crl);
+        ncs.set_high();
+        let mut reset = gpioa.pa3.into_push_pull_output(&mut gpioa.crl);
+        reset.set_high();
+        let mut delay = Delay::new(cp.SYST, clocks);
+
+        Enc28j60::new(
+            spi,
+            ncs,
+            enc28j60::Unconnected,
+            reset,
+            &mut delay,
+            7168,
+            SRC_MAC,
+        )
+        .ok()
+        .unwrap()
+    };
     writeln!(serial, "enc26j60 initialized").unwrap();
 
     // PHY Wrapper

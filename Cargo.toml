@@ -39,7 +39,7 @@ optional = true
 cortex-m-rt = "0.6.7"
 cortex-m = "0.5.8"
 panic-semihosting = "0.5.1"
-stm32f1xx-hal = { git = "https://github.com/stm32-rs/stm32f1xx-hal.git", features = ["stm32f103", "rt"] }
+stm32f1xx-hal = { git = "https://github.com/stm32-rs/stm32f1xx-hal.git", rev = "c7a5750", features = ["stm32f103", "rt"] }
 
 [[example]]
 name = "smoltcp"
