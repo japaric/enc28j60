@@ -14,9 +14,6 @@ version = "0.3.0"
 [dependencies]
 as-slice = "0.1.0"
 
-[dependencies]
-cortex-m-semihosting = "0.3.2"
-
 [dependencies.cast]
 default-features = false
 version = "0.2.2"
@@ -37,8 +34,7 @@ cortex-m-rt = "0.6.7"
 cortex-m = "0.5.8"
 panic-semihosting = "0.5.1"
 stm32f1xx-hal = { git = "https://github.com/stm32-rs/stm32f1xx-hal.git", features = ["stm32f103", "rt"] }
-smoltcp = { version = "0.5.0", default-features = false, features = ["proto-ipv4", "socket-tcp", "log", "verbose"] }
-log = "0.4.6"
+smoltcp = { git = "https://github.com/m-labs/smoltcp.git", default-features = false, features = ["proto-ipv4", "socket-tcp"] }
 
 [profile.release]
 debug = true

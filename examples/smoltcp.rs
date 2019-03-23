@@ -16,30 +16,23 @@
 #![no_std]
 #![no_main]
 
-extern crate cortex_m_rt as rt;
-#[macro_use]
 extern crate cortex_m;
-extern crate cortex_m_semihosting;
+extern crate cortex_m_rt as rt;
 extern crate embedded_hal;
 extern crate enc28j60;
-extern crate log;
 extern crate panic_semihosting;
 extern crate smoltcp;
 extern crate stm32f1xx_hal as hal;
 
 use core::fmt::Write;
-use core::intrinsics::transmute;
-use cortex_m_semihosting::hio;
-use embedded_hal::blocking;
-use embedded_hal::digital::{InputPin, OutputPin};
-use enc28j60::{Enc28j60, IntPin, ResetPin};
+use embedded_hal::digital::OutputPin;
+use enc28j60::Enc28j60;
 use hal::delay::Delay;
 use hal::device;
 use hal::prelude::*;
 use hal::serial::Serial;
 use hal::spi::Spi;
-use log::{Level, LevelFilter, Metadata, Record};
-use rt::{entry, exception};
+use rt::entry;
 
 use smoltcp::iface::{EthernetInterfaceBuilder, NeighborCache};
 use smoltcp::phy::{self, Device, DeviceCapabilities};
@@ -52,32 +45,8 @@ use smoltcp::Result;
 const KB: u16 = 1024; // bytes
 const SRC_MAC: [u8; 6] = [0x20, 0x18, 0x03, 0x01, 0x00, 0x00];
 
-static mut LOGGER: HioLogger = HioLogger {};
-
-struct HioLogger {}
-
-impl log::Log for HioLogger {
-    fn enabled(&self, metadata: &Metadata) -> bool {
-        metadata.level() <= Level::Trace
-    }
-
-    fn log(&self, record: &Record) {
-        if self.enabled(record.metadata()) {
-            let mut stdout = hio::hstdout().unwrap();
-            writeln!(stdout, "{} - {}", record.level(), record.args()).unwrap();
-        }
-    }
-    fn flush(&self) {}
-}
-
-
 #[entry]
 fn main() -> ! {
-    unsafe {
-        log::set_logger(&LOGGER).unwrap();
-    }
-    log::set_max_level(LevelFilter::Trace);
-
     let mut cp = cortex_m::Peripherals::take().unwrap();
     let dp = device::Peripherals::take().unwrap();
 
@@ -134,7 +103,7 @@ fn main() -> ! {
     let mut reset = gpioa.pa3.into_push_pull_output(&mut gpioa.crl);
     reset.set_high();
     let mut delay = Delay::new(cp.SYST, clocks);
-    let mut enc28j60 = Enc28j60::new(
+    let enc28j60 = Enc28j60::new(
         spi,
         ncs,
         enc28j60::Unconnected,
@@ -181,10 +150,8 @@ fn main() -> ! {
     delay.delay_ms(100_u8);
 
     loop {
-        writeln!(serial, "loop").unwrap();
         match iface.poll(&mut sockets, Instant::from_millis(0)) {
             Ok(b) => {
-                writeln!(serial, "Ok({:?})", b).unwrap();
                 if b {
                     let mut socket = sockets.get::<TcpSocket>(server_handle);
                     if !socket.is_open() {
@@ -192,9 +159,9 @@ fn main() -> ! {
                     }
 
                     if socket.can_send() {
-                        writeln!(serial, "tcp:80 send greeting");
-                        write!(socket, "hello\n").unwrap();
-                        writeln!(serial, "tcp:80 close");
+                        writeln!(serial, "tcp:80 send greeting").unwrap();
+                        write!(socket, "HTTP/1.1 200 OK\r\n\r\ntest string\n").unwrap();
+                        writeln!(serial, "tcp:80 close").unwrap();
                         socket.close();
                     }
                 }
@@ -220,7 +187,7 @@ struct EncPhy {
         enc28j60::Unconnected,
         hal::gpio::gpioa::PA3<hal::gpio::Output<hal::gpio::PushPull>>,
     >,
-    rxbuf: [u8; 256],
+    rxbuf: [u8; 1024],
 }
 
 impl EncPhy {
@@ -241,7 +208,7 @@ impl EncPhy {
     ) -> Self {
         EncPhy {
             inner,
-            rxbuf: [0u8; 256],
+            rxbuf: [0u8; 1024],
         }
     }
 }
@@ -251,23 +218,33 @@ impl<'a, 'b> Device<'a> for &'b mut EncPhy {
     type TxToken = PhyTxToken<'a>;
 
     fn receive(&'a mut self) -> Option<(Self::RxToken, Self::TxToken)> {
-        let len = self.inner.receive(self.rxbuf.as_mut()).ok().unwrap();
-        Some((
-            PhyRxToken(&mut self.rxbuf[..len as usize]),
-            PhyTxToken {
-                enc28j60: &mut self.inner,
-                txbuf: [0u8; 256],
-            },
-        ))
+        let packet = self.inner.next_packet().unwrap();
+        match packet {
+            Some(packet) => {
+                packet.read(&mut self.rxbuf[..]).unwrap();
+                Some((
+                    PhyRxToken(&mut self.rxbuf[..]),
+                    PhyTxToken {
+                        enc28j60: &mut self.inner,
+                        txbuf: [0u8; 1024],
+                    },
+                ))
+            }
+            None => None,
+        }
     }
 
     fn transmit(&'a mut self) -> Option<Self::TxToken> {
-        self.inner.flush().unwrap();
-        None
+        Some(PhyTxToken {
+            enc28j60: &mut self.inner,
+            txbuf: [0u8; 1024],
+        })
     }
 
     fn capabilities(&self) -> DeviceCapabilities {
-        DeviceCapabilities::default()
+        let mut caps = DeviceCapabilities::default();
+        caps.max_transmission_unit = 1500;
+        caps
     }
 }
 
@@ -297,7 +274,7 @@ struct PhyTxToken<'a> {
         enc28j60::Unconnected,
         hal::gpio::gpioa::PA3<hal::gpio::Output<hal::gpio::PushPull>>,
     >,
-    txbuf: [u8; 256],
+    txbuf: [u8; 1024],
 }
 
 impl<'a> phy::TxToken for PhyTxToken<'a> {
