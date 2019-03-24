@@ -1,4 +1,4 @@
-//! todo
+//! ENC28J60 wrapper for use as a smoltcp interface
 
 use crate::Enc28j60;
 use embedded_hal::{blocking, digital::OutputPin};
@@ -7,14 +7,14 @@ use smoltcp::{
     time::Instant,
 };
 
-/// Wrapper for Enc28j60 for use as a `smoltcp` interface
+/// Wrapper for use as a `smoltcp` interface for sending and receiving raw network frames.
 pub struct Phy<'a, SPI, NCS, INT, RESET> {
     phy: Enc28j60<SPI, NCS, INT, RESET>,
     rx_buf: &'a mut [u8],
 }
 
 impl<'a, SPI, NCS, INT, RESET> Phy<'a, SPI, NCS, INT, RESET> {
-    /// Create a new Eth from an Enc28j60 and a receive buffer
+    /// Create a new ethernet interface from an Enc28j60 and a receive buffer
     pub fn new(phy: Enc28j60<SPI, NCS, INT, RESET>, rx_buf: &'a mut [u8]) -> Self {
         Phy { phy, rx_buf }
     }
@@ -61,7 +61,7 @@ where
     }
 }
 
-/// ?
+/// A token to receive a single network packet
 pub struct RxToken<'a>(&'a [u8]);
 
 impl<'a> phy::RxToken for RxToken<'a> {
@@ -74,7 +74,7 @@ impl<'a> phy::RxToken for RxToken<'a> {
     }
 }
 
-/// ?
+/// A token to transmit a single network packet.
 pub struct TxToken<'a, SPI, NCS, INT, RESET> {
     phy: &'a mut Enc28j60<SPI, NCS, INT, RESET>,
     buf: [u8; 1024],

@@ -140,6 +140,7 @@ fn main() -> ! {
     // LED on after initialization
     led.set_low();
 
+    let mut count: u64 = 0;
     loop {
         match iface.poll(&mut sockets, Instant::from_millis(0)) {
             Ok(b) => {
@@ -150,20 +151,24 @@ fn main() -> ! {
                     }
 
                     if socket.can_send() {
-                        writeln!(serial, "tcp:80 send").unwrap();
                         led.toggle();
-
+                        
+                        writeln!(serial, "tcp:80 send").unwrap();
                         write!(
                             socket,
-                            "HTTP/1.1 200 OK\r\n\r\nLED is currently: {}\n",
+                            "HTTP/1.1 200 OK\r\n\r\nHello!\nLED is currently {} and has been toggled {} times.\n",
                             match led.is_set_low() {
                                 true => "on",
                                 false => "off",
-                            }
+                            },
+                            count
                         )
                         .unwrap();
+
                         writeln!(serial, "tcp:80 close").unwrap();
                         socket.close();
+
+                        count += 1;
                     }
                 }
             }
