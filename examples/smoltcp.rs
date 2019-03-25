@@ -107,8 +107,9 @@ fn main() -> ! {
     writeln!(serial, "enc26j60 initialized").unwrap();
 
     // PHY Wrapper
-    let mut buf = [0u8; 1024];
-    let mut eth = Phy::new(enc28j60, &mut buf);
+    let mut rx_buf = [0u8; 1024];
+    let mut tx_buf = [0u8; 1024];
+    let mut eth = Phy::new(enc28j60, &mut rx_buf, &mut tx_buf);
     writeln!(serial, "eth initialized").unwrap();
 
     // Ethernet interface
@@ -152,7 +153,7 @@ fn main() -> ! {
 
                     if socket.can_send() {
                         led.toggle();
-                        
+
                         writeln!(serial, "tcp:80 send").unwrap();
                         write!(
                             socket,

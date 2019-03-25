@@ -11,12 +11,13 @@ use smoltcp::{
 pub struct Phy<'a, SPI, NCS, INT, RESET> {
     phy: Enc28j60<SPI, NCS, INT, RESET>,
     rx_buf: &'a mut [u8],
+    tx_buf: &'a mut [u8],
 }
 
 impl<'a, SPI, NCS, INT, RESET> Phy<'a, SPI, NCS, INT, RESET> {
-    /// Create a new ethernet interface from an Enc28j60 and a receive buffer
-    pub fn new(phy: Enc28j60<SPI, NCS, INT, RESET>, rx_buf: &'a mut [u8]) -> Self {
-        Phy { phy, rx_buf }
+    /// Create a new ethernet interface from an Enc28j60, a receive buffer and a transmit buffer.
+    pub fn new(phy: Enc28j60<SPI, NCS, INT, RESET>, rx_buf: &'a mut [u8], tx_buf: &'a mut [u8]) -> Self {
+        Phy { phy, rx_buf, tx_buf }
     }
 }
 
@@ -39,7 +40,7 @@ where
                     RxToken(&mut self.rx_buf[..]),
                     TxToken {
                         phy: &mut self.phy,
-                        buf: [0u8; 1024],
+                        buf: &mut self.tx_buf,
                     },
                 ))
             }
@@ -50,7 +51,7 @@ where
     fn transmit(&'a mut self) -> Option<Self::TxToken> {
         Some(TxToken {
             phy: &mut self.phy,
-            buf: [0u8; 1024],
+            buf: &mut self.tx_buf,
         })
     }
 
@@ -77,7 +78,7 @@ impl<'a> phy::RxToken for RxToken<'a> {
 /// A token to transmit a single network packet.
 pub struct TxToken<'a, SPI, NCS, INT, RESET> {
     phy: &'a mut Enc28j60<SPI, NCS, INT, RESET>,
-    buf: [u8; 1024],
+    buf: &'a mut [u8],
 }
 
 impl<'a, E, SPI, NCS, INT, RESET> phy::TxToken for TxToken<'a, SPI, NCS, INT, RESET>
@@ -87,7 +88,7 @@ where
     INT: crate::sealed::IntPin,
     RESET: crate::sealed::ResetPin,
 {
-    fn consume<R, F>(mut self, _timestamp: Instant, len: usize, f: F) -> smoltcp::Result<R>
+    fn consume<R, F>(self, _timestamp: Instant, len: usize, f: F) -> smoltcp::Result<R>
     where
         F: FnOnce(&mut [u8]) -> smoltcp::Result<R>,
     {
