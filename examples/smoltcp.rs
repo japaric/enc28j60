@@ -5,10 +5,10 @@
 //!
 //! You can test this program with the following:
 //!
-//! - `ping 192.168.1.2`. The device will respond to every request (response time should be ~10ms).
-//! - `curl 192.168.1.2`. The device will respond with a HTTP response with the current
+//! - `ping 192.168.5.2`. The device will respond to every request (response time should be ~10ms).
+//! - `curl 192.168.5.2`. The device will respond with a HTTP response with the current
 //! LED state in the body.
-//! - Visiting `https://192.168.1.2/`. Every refresh will toggle the LED and the page will
+//! - Visiting `https://192.168.5.2/`. Every refresh will toggle the LED and the page will
 //! reflect the current state.
 //!
 #![no_std]
@@ -25,7 +25,12 @@ use smoltcp::{
     time::Instant,
     wire::{EthernetAddress, IpAddress, IpCidr, Ipv4Address},
 };
-use stm32f1xx_hal::{delay::Delay, device, prelude::*, serial::Serial, spi::Spi};
+
+use embedded_hal::digital::v2::{OutputPin, StatefulOutputPin};
+use stm32f1xx_hal::{
+    afio::AfioExt, delay::Delay, device, flash::FlashExt, gpio::GpioExt, rcc::RccExt,
+    serial::Serial, spi::Spi, time::*,
+};
 
 const SRC_MAC: [u8; 6] = [0x20, 0x18, 0x03, 0x01, 0x00, 0x00];
 
@@ -47,7 +52,7 @@ fn main() -> ! {
     // LED
     let mut led = gpioc.pc13.into_push_pull_output(&mut gpioc.crh);
     // turn the LED off during initialization
-    led.set_high();
+    let _ = led.set_low();
 
     // Serial
     let mut serial = {
@@ -57,7 +62,7 @@ fn main() -> ! {
             dp.USART1,
             (tx, rx),
             &mut afio.mapr,
-            115_200.bps(),
+            115_200_u32.bps(),
             clocks,
             &mut rcc.apb2,
         );
@@ -77,7 +82,7 @@ fn main() -> ! {
             (sck, miso, mosi),
             &mut afio.mapr,
             enc28j60::MODE,
-            1.mhz(),
+            1_u32.mhz(),
             clocks,
             &mut rcc.apb2,
         )
@@ -87,9 +92,9 @@ fn main() -> ! {
     // ENC28J60
     let enc28j60 = {
         let mut ncs = gpioa.pa4.into_push_pull_output(&mut gpioa.crl);
-        ncs.set_high();
+        let _ = ncs.set_high();
         let mut reset = gpioa.pa3.into_push_pull_output(&mut gpioa.crl);
-        reset.set_high();
+        let _ = reset.set_high();
         let mut delay = Delay::new(cp.SYST, clocks);
 
         Enc28j60::new(
@@ -113,7 +118,7 @@ fn main() -> ! {
     writeln!(serial, "eth initialized").unwrap();
 
     // Ethernet interface
-    let local_addr = Ipv4Address::new(192, 168, 1, 2);
+    let local_addr = Ipv4Address::new(192, 168, 5, 2);
     let ip_addr = IpCidr::new(IpAddress::from(local_addr), 24);
     let mut ip_addrs = [ip_addr];
     let mut neighbor_storage = [None; 16];
@@ -138,9 +143,6 @@ fn main() -> ! {
     let server_handle = sockets.add(server_socket);
     writeln!(serial, "sockets initialized").unwrap();
 
-    // LED on after initialization
-    led.set_low();
-
     let mut count: u64 = 0;
     loop {
         match iface.poll(&mut sockets, Instant::from_millis(0)) {
@@ -152,15 +154,21 @@ fn main() -> ! {
                     }
 
                     if socket.can_send() {
-                        led.toggle();
+                        // Toggle LED, without using ToggleableOutputPin in case it isn't implemented.
+                        let _ = match led.is_set_high() {
+                            Result::Ok(true) => led.set_low(),
+                            _ => led.set_high(),
+                        };
+                        count += 1;
 
                         writeln!(serial, "tcp:80 send").unwrap();
                         write!(
                             socket,
                             "HTTP/1.1 200 OK\r\n\r\nHello!\nLED is currently {} and has been toggled {} times.\n",
                             match led.is_set_low() {
-                                true => "on",
-                                false => "off",
+                                Result::Ok(true) => "on",
+                                Result::Ok(false) => "off",
+                                _ => "Error",
                             },
                             count
                         )
@@ -168,8 +176,6 @@ fn main() -> ! {
 
                         writeln!(serial, "tcp:80 close").unwrap();
                         socket.close();
-
-                        count += 1;
                     }
                 }
             }

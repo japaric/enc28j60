@@ -1,7 +1,7 @@
 //! ENC28J60 wrapper for use as a smoltcp interface
 
 use crate::Enc28j60;
-use embedded_hal::{blocking, digital::OutputPin};
+use embedded_hal::{blocking, digital::v2::OutputPin};
 use smoltcp::{
     phy::{self, Device, DeviceCapabilities},
     time::Instant,
@@ -16,8 +16,16 @@ pub struct Phy<'a, SPI, NCS, INT, RESET> {
 
 impl<'a, SPI, NCS, INT, RESET> Phy<'a, SPI, NCS, INT, RESET> {
     /// Create a new ethernet interface from an Enc28j60, a receive buffer and a transmit buffer.
-    pub fn new(phy: Enc28j60<SPI, NCS, INT, RESET>, rx_buf: &'a mut [u8], tx_buf: &'a mut [u8]) -> Self {
-        Phy { phy, rx_buf, tx_buf }
+    pub fn new(
+        phy: Enc28j60<SPI, NCS, INT, RESET>,
+        rx_buf: &'a mut [u8],
+        tx_buf: &'a mut [u8],
+    ) -> Self {
+        Phy {
+            phy,
+            rx_buf,
+            tx_buf,
+        }
     }
 }
 
@@ -32,9 +40,8 @@ where
     type TxToken = TxToken<'a, SPI, NCS, INT, RESET>;
 
     fn receive(&'a mut self) -> Option<(Self::RxToken, Self::TxToken)> {
-        let packet = self.phy.next_packet().ok().unwrap();
-        match packet {
-            Some(packet) => {
+        match self.phy.next_packet().ok() {
+            Some(Some(packet)) => {
                 packet.read(&mut self.rx_buf[..]).ok().unwrap();
                 Some((
                     RxToken(&mut self.rx_buf[..]),
@@ -44,7 +51,7 @@ where
                     },
                 ))
             }
-            None => None,
+            _ => None,
         }
     }
 
@@ -63,12 +70,12 @@ where
 }
 
 /// A token to receive a single network packet
-pub struct RxToken<'a>(&'a [u8]);
+pub struct RxToken<'a>(&'a mut [u8]);
 
 impl<'a> phy::RxToken for RxToken<'a> {
     fn consume<R, F>(self, _timestamp: Instant, f: F) -> smoltcp::Result<R>
     where
-        F: FnOnce(&[u8]) -> smoltcp::Result<R>,
+        F: FnOnce(&mut [u8]) -> smoltcp::Result<R>,
     {
         let result = f(self.0);
         result
