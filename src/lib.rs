@@ -31,7 +31,7 @@ use byteorder::{ByteOrder, LE};
 use cast::usize;
 use embedded_hal::{
     blocking::{self, delay::DelayMs},
-    digital::{InputPin, OutputPin},
+    digital::v2::{InputPin, OutputPin},
     spi::{Mode, Phase, Polarity},
 };
 use owning_slice::IntoSliceTo;
@@ -71,6 +71,7 @@ const CRC_SZ: u16 = 4;
 ///
 /// *NOTE:* this enum may gain more variants in the future
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum Error<E> {
     /// Late collision
     LateCollision,
@@ -86,10 +87,6 @@ pub enum Error<E> {
 
     /// SPI error
     Spi(E),
-
-    #[doc(hidden)]
-    #[allow(non_camel_case_types)]
-    _DO_NOT_MATCH_AGAINST_THIS_VARIANT,
 }
 
 /// Events that the ENC28J60 can notify about via the INT pin
@@ -385,7 +382,7 @@ where
         self.write_control_register(bank0::Register::ETXNDH, txnd.high())?;
 
         // 4. reset interrupt flag
-        self.bit_field_clear(common::Register::EIR, { common::EIR::mask().txif() })?;
+        self.bit_field_clear(common::Register::EIR, common::EIR::mask().txif())?;
 
         // 5. start transmission
         self.bit_field_set(common::Register::ECON1, common::ECON1::mask().txrts())?;
@@ -475,10 +472,10 @@ where
     fn _read_control_register(&mut self, register: Register) -> Result<u8, E> {
         self.change_bank(register)?;
 
-        self.ncs.set_low();
+        let _ = self.ncs.set_low();
         let mut buffer = [Instruction::RCR.opcode() | register.addr(), 0];
         self.spi.transfer(&mut buffer)?;
-        self.ncs.set_high();
+        let _ = self.ncs.set_high();
 
         Ok(buffer[1])
     }
@@ -506,10 +503,10 @@ where
     fn _write_control_register(&mut self, register: Register, value: u8) -> Result<(), E> {
         self.change_bank(register)?;
 
-        self.ncs.set_low();
+        let _ = self.ncs.set_low();
         let buffer = [Instruction::WCR.opcode() | register.addr(), value];
         self.spi.write(&buffer)?;
-        self.ncs.set_high();
+        let _ = self.ncs.set_high();
 
         Ok(())
     }
@@ -593,10 +590,10 @@ where
 
         self.change_bank(register)?;
 
-        self.ncs.set_low();
+        let _ = self.ncs.set_low();
         self.spi
             .write(&[Instruction::BFC.opcode() | register.addr(), mask])?;
-        self.ncs.set_high();
+        let _ = self.ncs.set_high();
 
         Ok(())
     }
@@ -613,10 +610,10 @@ where
 
         self.change_bank(register)?;
 
-        self.ncs.set_low();
+        let _ = self.ncs.set_low();
         self.spi
             .write(&[Instruction::BFS.opcode() | register.addr(), mask])?;
-        self.ncs.set_high();
+        let _ = self.ncs.set_high();
 
         Ok(())
     }
@@ -627,18 +624,18 @@ where
             self.write_control_register(bank0::Register::ERDPTH, addr.high())?;
         }
 
-        self.ncs.set_low();
+        let _ = self.ncs.set_low();
         self.spi.write(&[Instruction::RBM.opcode()])?;
         self.spi.transfer(buf)?;
-        self.ncs.set_high();
+        let _ = self.ncs.set_high();
 
         Ok(())
     }
 
     fn soft_reset(&mut self) -> Result<(), E> {
-        self.ncs.set_low();
+        let _ = self.ncs.set_low();
         self.spi.transfer(&mut [Instruction::SRC.opcode()])?;
-        self.ncs.set_high();
+        let _ = self.ncs.set_high();
 
         Ok(())
     }
@@ -649,10 +646,10 @@ where
             self.write_control_register(bank0::Register::EWRPTH, addr.high())?;
         }
 
-        self.ncs.set_low();
+        let _ = self.ncs.set_low();
         self.spi.write(&[Instruction::WBM.opcode()])?;
         self.spi.write(buffer)?;
-        self.ncs.set_high();
+        let _ = self.ncs.set_high();
         Ok(())
     }
 }
@@ -683,7 +680,7 @@ where
 
     /// Checks if there's any interrupt pending to be processed by polling the INT pin
     pub fn interrupt_pending(&mut self) -> bool {
-        self.int.is_low()
+        self.int.is_low().unwrap_or(false)
     }
 
     /// Stops listening for the specified event
@@ -768,8 +765,9 @@ where
     OP: OutputPin + 'static,
 {
     fn reset(&mut self) {
-        self.set_low();
-        self.set_high();
+        // when is this ever going to fail?
+        let _ = self.set_low();
+        let _ = self.set_high();
     }
 }
 

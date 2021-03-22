@@ -1,7 +1,7 @@
 //! ENC28J60 wrapper for use as a smoltcp interface
 
 use crate::Enc28j60;
-use embedded_hal::{blocking, digital::OutputPin};
+use embedded_hal::{blocking, digital::v2::OutputPin};
 use smoltcp::{
     phy::{self, Device, DeviceCapabilities},
     time::Instant,
@@ -71,14 +71,14 @@ where
 }
 
 /// A token to receive a single network packet
-pub struct RxToken<'a>(&'a [u8]);
+pub struct RxToken<'a>(&'a mut [u8]);
 
 impl<'a> phy::RxToken for RxToken<'a> {
-    fn consume<R, F>(self, _timestamp: Instant, f: F) -> smoltcp::Result<R>
+    fn consume<R, F>(mut self, _timestamp: Instant, f: F) -> smoltcp::Result<R>
     where
-        F: FnOnce(&[u8]) -> smoltcp::Result<R>,
+        F: FnOnce(&mut [u8]) -> smoltcp::Result<R>,
     {
-        let result = f(self.0);
+        let result = f(&mut self.0);
         result
     }
 }
