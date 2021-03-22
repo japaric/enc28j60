@@ -18,6 +18,7 @@ extern crate panic_semihosting;
 
 use core::fmt::Write;
 use cortex_m_rt::entry;
+use embedded_hal::digital::v2::OutputPin;
 use enc28j60::{smoltcp_phy::Phy, Enc28j60};
 use smoltcp::{
     iface::{EthernetInterfaceBuilder, NeighborCache},
@@ -25,7 +26,13 @@ use smoltcp::{
     time::Instant,
     wire::{EthernetAddress, IpAddress, IpCidr, Ipv4Address},
 };
-use stm32f1xx_hal::{delay::Delay, device, prelude::*, serial::Serial, spi::Spi};
+use stm32f1xx_hal::{
+    delay::Delay,
+    device,
+    prelude::*,
+    serial::{self, Serial},
+    spi::Spi,
+};
 
 const SRC_MAC: [u8; 6] = [0x20, 0x18, 0x03, 0x01, 0x00, 0x00];
 
@@ -47,7 +54,7 @@ fn main() -> ! {
     // LED
     let mut led = gpioc.pc13.into_push_pull_output(&mut gpioc.crh);
     // turn the LED off during initialization
-    led.set_high();
+    let _ = led.set_high();
 
     // Serial
     let mut serial = {
@@ -57,7 +64,7 @@ fn main() -> ! {
             dp.USART1,
             (tx, rx),
             &mut afio.mapr,
-            115_200.bps(),
+            serial::Config::default().baudrate(115_200.bps()),
             clocks,
             &mut rcc.apb2,
         );
@@ -87,9 +94,9 @@ fn main() -> ! {
     // ENC28J60
     let enc28j60 = {
         let mut ncs = gpioa.pa4.into_push_pull_output(&mut gpioa.crl);
-        ncs.set_high();
+        let _ = ncs.set_high();
         let mut reset = gpioa.pa3.into_push_pull_output(&mut gpioa.crl);
-        reset.set_high();
+        let _ = reset.set_high();
         let mut delay = Delay::new(cp.SYST, clocks);
 
         Enc28j60::new(
@@ -139,7 +146,7 @@ fn main() -> ! {
     writeln!(serial, "sockets initialized").unwrap();
 
     // LED on after initialization
-    led.set_low();
+    let _ = led.set_low();
 
     let mut count: u64 = 0;
     loop {
@@ -152,13 +159,13 @@ fn main() -> ! {
                     }
 
                     if socket.can_send() {
-                        led.toggle();
+                        let _ = led.toggle();
 
                         writeln!(serial, "tcp:80 send").unwrap();
                         write!(
                             socket,
                             "HTTP/1.1 200 OK\r\n\r\nHello!\nLED is currently {} and has been toggled {} times.\n",
-                            match led.is_set_low() {
+                            match led.is_set_low().unwrap() {
                                 true => "on",
                                 false => "off",
                             },
