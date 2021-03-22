@@ -16,8 +16,16 @@ pub struct Phy<'a, SPI, NCS, INT, RESET> {
 
 impl<'a, SPI, NCS, INT, RESET> Phy<'a, SPI, NCS, INT, RESET> {
     /// Create a new ethernet interface from an Enc28j60, a receive buffer and a transmit buffer.
-    pub fn new(phy: Enc28j60<SPI, NCS, INT, RESET>, rx_buf: &'a mut [u8], tx_buf: &'a mut [u8]) -> Self {
-        Phy { phy, rx_buf, tx_buf }
+    pub fn new(
+        phy: Enc28j60<SPI, NCS, INT, RESET>,
+        rx_buf: &'a mut [u8],
+        tx_buf: &'a mut [u8],
+    ) -> Self {
+        Phy {
+            phy,
+            rx_buf,
+            tx_buf,
+        }
     }
 }
 
