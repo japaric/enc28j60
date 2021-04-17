@@ -73,7 +73,7 @@ where
 pub struct RxToken<'a>(&'a mut [u8]);
 
 impl<'a> phy::RxToken for RxToken<'a> {
-    fn consume<R, F>(self, _timestamp: Instant, f: F) -> smoltcp::Result<R>
+    fn consume<R, F>(mut self, _timestamp: Instant, f: F) -> smoltcp::Result<R>
     where
         F: FnOnce(&mut [u8]) -> smoltcp::Result<R>,
     {
