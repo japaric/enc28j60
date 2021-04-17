@@ -63,7 +63,7 @@ impl Register {
 }
 
 impl Into<crate::Register> for Register {
-    fn into(self) ->crate ::Register {
+    fn into(self) -> crate::Register {
         crate::Register::Bank0(self)
     }
 }

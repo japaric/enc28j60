@@ -31,7 +31,7 @@ use byteorder::{ByteOrder, LE};
 use cast::usize;
 use embedded_hal::{
     blocking::{self, delay::DelayMs},
-    digital::{InputPin, OutputPin},
+    digital::v2::{InputPin, OutputPin},
     spi::{Mode, Phase, Polarity},
 };
 use owning_slice::IntoSliceTo;
@@ -48,6 +48,9 @@ mod common;
 mod phy;
 mod sealed;
 mod traits;
+
+#[cfg(feature = "smoltcp")]
+pub mod smoltcp_phy;
 
 /// SPI mode
 pub const MODE: Mode = Mode {
@@ -327,8 +330,13 @@ where
 
             // status vector
             let status = RxStatus(LE::read_u32(&temp_buf[2..]));
-            let len = status.byte_count() as u16 - CRC_SZ;
+            let byte_count = status.byte_count() as u16;
 
+            if byte_count < CRC_SZ {
+                return Err(Error::CorruptRxBuffer);
+            }
+
+            let len = byte_count - CRC_SZ;
             if len > self.rxnd {
                 return Err(Error::CorruptRxBuffer);
             }
@@ -472,10 +480,10 @@ where
     fn _read_control_register(&mut self, register: Register) -> Result<u8, E> {
         self.change_bank(register)?;
 
-        self.ncs.set_low();
+        let _ = self.ncs.set_low();
         let mut buffer = [Instruction::RCR.opcode() | register.addr(), 0];
         self.spi.transfer(&mut buffer)?;
-        self.ncs.set_high();
+        let _ = self.ncs.set_high();
 
         Ok(buffer[1])
     }
@@ -503,10 +511,10 @@ where
     fn _write_control_register(&mut self, register: Register, value: u8) -> Result<(), E> {
         self.change_bank(register)?;
 
-        self.ncs.set_low();
+        let _ = self.ncs.set_low();
         let buffer = [Instruction::WCR.opcode() | register.addr(), value];
         self.spi.write(&buffer)?;
-        self.ncs.set_high();
+        let _ = self.ncs.set_high();
 
         Ok(())
     }
@@ -590,10 +598,10 @@ where
 
         self.change_bank(register)?;
 
-        self.ncs.set_low();
+        let _ = self.ncs.set_low();
         self.spi
             .write(&[Instruction::BFC.opcode() | register.addr(), mask])?;
-        self.ncs.set_high();
+        let _ = self.ncs.set_high();
 
         Ok(())
     }
@@ -610,10 +618,10 @@ where
 
         self.change_bank(register)?;
 
-        self.ncs.set_low();
+        let _ = self.ncs.set_low();
         self.spi
             .write(&[Instruction::BFS.opcode() | register.addr(), mask])?;
-        self.ncs.set_high();
+        let _ = self.ncs.set_high();
 
         Ok(())
     }
@@ -624,18 +632,18 @@ where
             self.write_control_register(bank0::Register::ERDPTH, addr.high())?;
         }
 
-        self.ncs.set_low();
+        let _ = self.ncs.set_low();
         self.spi.write(&[Instruction::RBM.opcode()])?;
         self.spi.transfer(buf)?;
-        self.ncs.set_high();
+        let _ = self.ncs.set_high();
 
         Ok(())
     }
 
     fn soft_reset(&mut self) -> Result<(), E> {
-        self.ncs.set_low();
+        let _ = self.ncs.set_low();
         self.spi.transfer(&mut [Instruction::SRC.opcode()])?;
-        self.ncs.set_high();
+        let _ = self.ncs.set_high();
 
         Ok(())
     }
@@ -646,10 +654,10 @@ where
             self.write_control_register(bank0::Register::EWRPTH, addr.high())?;
         }
 
-        self.ncs.set_low();
+        let _ = self.ncs.set_low();
         self.spi.write(&[Instruction::WBM.opcode()])?;
         self.spi.write(buffer)?;
-        self.ncs.set_high();
+        let _ = self.ncs.set_high();
         Ok(())
     }
 }
@@ -680,7 +688,10 @@ where
 
     /// Checks if there's any interrupt pending to be processed by polling the INT pin
     pub fn interrupt_pending(&mut self) -> bool {
-        self.int.is_low()
+        match self.int.is_low() {
+            Ok(_) => true,
+            _ => false,
+        }
     }
 
     /// Stops listening for the specified event
@@ -765,8 +776,8 @@ where
     OP: OutputPin + 'static,
 {
     fn reset(&mut self) {
-        self.set_low();
-        self.set_high();
+        let _ = self.set_low();
+        let _ = self.set_high();
     }
 }
 
