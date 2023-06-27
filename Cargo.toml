@@ -33,10 +33,10 @@ version = "0.7"
 optional = true
 
 [dev-dependencies]
-cortex-m-rt = "0.6"
-cortex-m = "0.6"
+cortex-m-rt = "0.7"
+cortex-m = "0.7"
 panic-semihosting = "0.6"
-stm32f1xx-hal = { version = "0.7", features = ["stm32f103", "rt"] }
+stm32f1xx-hal = { version = "0.10", features = ["stm32f103", "rt"] }
 
 [[example]]
 name = "smoltcp"

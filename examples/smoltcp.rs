@@ -18,7 +18,6 @@ extern crate panic_semihosting;
 
 use core::fmt::Write;
 use cortex_m_rt::entry;
-use embedded_hal::digital::v2::OutputPin;
 use enc28j60::{smoltcp_phy::Phy, Enc28j60};
 use smoltcp::{
     iface::{EthernetInterfaceBuilder, NeighborCache},
@@ -27,11 +26,11 @@ use smoltcp::{
     wire::{EthernetAddress, IpAddress, IpCidr, Ipv4Address},
 };
 use stm32f1xx_hal::{
-    delay::Delay,
     device,
     prelude::*,
     serial::{self, Serial},
     spi::Spi,
+    timer::Timer,
 };
 
 const SRC_MAC: [u8; 6] = [0x20, 0x18, 0x03, 0x01, 0x00, 0x00];
@@ -41,12 +40,12 @@ fn main() -> ! {
     let mut cp = cortex_m::Peripherals::take().unwrap();
     let dp = device::Peripherals::take().unwrap();
 
-    let mut rcc = dp.RCC.constrain();
-    let mut afio = dp.AFIO.constrain(&mut rcc.apb2);
+    let rcc = dp.RCC.constrain();
+    let mut afio = dp.AFIO.constrain();
     let mut flash = dp.FLASH.constrain();
-    let mut gpioa = dp.GPIOA.split(&mut rcc.apb2);
-    let mut gpiob = dp.GPIOB.split(&mut rcc.apb2);
-    let mut gpioc = dp.GPIOC.split(&mut rcc.apb2);
+    let mut gpioa = dp.GPIOA.split();
+    let mut gpiob = dp.GPIOB.split();
+    let mut gpioc = dp.GPIOC.split();
     let clocks = rcc.cfgr.freeze(&mut flash.acr);
 
     cp.DWT.enable_cycle_counter();
@@ -60,13 +59,12 @@ fn main() -> ! {
     let mut serial = {
         let tx = gpiob.pb6.into_alternate_push_pull(&mut gpiob.crl);
         let rx = gpiob.pb7;
-        let serial = Serial::usart1(
+        let serial = Serial::new(
             dp.USART1,
             (tx, rx),
             &mut afio.mapr,
             serial::Config::default().baudrate(115_200.bps()),
-            clocks,
-            &mut rcc.apb2,
+            &clocks,
         );
 
         serial.split().0
@@ -84,9 +82,8 @@ fn main() -> ! {
             (sck, miso, mosi),
             &mut afio.mapr,
             enc28j60::MODE,
-            1.mhz(),
+            1.MHz(),
             clocks,
-            &mut rcc.apb2,
         )
     };
     writeln!(serial, "spi initialized").unwrap();
@@ -97,7 +94,7 @@ fn main() -> ! {
         let _ = ncs.set_high();
         let mut reset = gpioa.pa3.into_push_pull_output(&mut gpioa.crl);
         let _ = reset.set_high();
-        let mut delay = Delay::new(cp.SYST, clocks);
+        let mut delay = Timer::delay(Timer::syst(cp.SYST, &clocks));
 
         Enc28j60::new(
             spi,
@@ -165,7 +162,7 @@ fn main() -> ! {
                         write!(
                             socket,
                             "HTTP/1.1 200 OK\r\n\r\nHello!\nLED is currently {} and has been toggled {} times.\n",
-                            match led.is_set_low().unwrap() {
+                            match led.is_set_low() {
                                 true => "on",
                                 false => "off",
                             },
