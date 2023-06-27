@@ -28,8 +28,8 @@ git = "https://github.com/japaric/owning-slice"
 
 [dependencies.smoltcp]
 default-features = false
-features = ["proto-ipv4", "socket-tcp", "ethernet"]
-version = "0.7"
+features = ["proto-ipv4", "socket-tcp", "medium-ethernet"]
+version = "0.10"
 optional = true
 
 [dev-dependencies]

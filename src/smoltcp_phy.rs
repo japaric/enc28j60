@@ -29,17 +29,17 @@ impl<'a, SPI, NCS, INT, RESET> Phy<'a, SPI, NCS, INT, RESET> {
     }
 }
 
-impl<'a, 'b, E, SPI: 'a, NCS: 'a, INT, RESET> Device<'a> for &mut Phy<'b, SPI, NCS, INT, RESET>
+impl<'a, E, SPI: 'a, NCS: 'a, INT, RESET> Device for Phy<'a, SPI, NCS, INT, RESET>
 where
     SPI: blocking::spi::Transfer<u8, Error = E> + blocking::spi::Write<u8, Error = E>,
     NCS: OutputPin,
     INT: crate::sealed::IntPin,
     RESET: crate::sealed::ResetPin,
 {
-    type RxToken = RxToken<'a>;
-    type TxToken = TxToken<'a, SPI, NCS, INT, RESET>;
+    type RxToken<'token> = RxToken<'token> where Self: 'token;
+    type TxToken<'token> = TxToken<'token, SPI, NCS, INT, RESET> where Self: 'token;
 
-    fn receive(&'a mut self) -> Option<(Self::RxToken, Self::TxToken)> {
+    fn receive(&mut self, _timestamp: Instant) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
         let packet = self.phy.next_packet();
         match packet {
             Ok(Some(packet)) => {
@@ -56,7 +56,7 @@ where
         }
     }
 
-    fn transmit(&'a mut self) -> Option<Self::TxToken> {
+    fn transmit(&mut self, _timestamp: Instant) -> Option<Self::TxToken<'_>> {
         Some(TxToken {
             phy: &mut self.phy,
             buf: &mut self.tx_buf,
@@ -74,9 +74,9 @@ where
 pub struct RxToken<'a>(&'a mut [u8]);
 
 impl<'a> phy::RxToken for RxToken<'a> {
-    fn consume<R, F>(mut self, _timestamp: Instant, f: F) -> smoltcp::Result<R>
+    fn consume<R, F>(mut self, f: F) -> R
     where
-        F: FnOnce(&mut [u8]) -> smoltcp::Result<R>,
+        F: FnOnce(&mut [u8]) -> R,
     {
         let result = f(&mut self.0);
         result
@@ -96,9 +96,9 @@ where
     INT: crate::sealed::IntPin,
     RESET: crate::sealed::ResetPin,
 {
-    fn consume<R, F>(self, _timestamp: Instant, len: usize, f: F) -> smoltcp::Result<R>
+    fn consume<R, F>(self, len: usize, f: F) -> R
     where
-        F: FnOnce(&mut [u8]) -> smoltcp::Result<R>,
+        F: FnOnce(&mut [u8]) -> R,
     {
         let result = f(&mut self.buf[..len]);
         self.phy.transmit(&self.buf[..len]).ok().unwrap();

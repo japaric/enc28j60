@@ -20,10 +20,10 @@ use core::fmt::Write;
 use cortex_m_rt::entry;
 use enc28j60::{smoltcp_phy::Phy, Enc28j60};
 use smoltcp::{
-    iface::{EthernetInterfaceBuilder, NeighborCache},
-    socket::{SocketSet, TcpSocket, TcpSocketBuffer},
+    iface::{Config, Interface, SocketSet},
+    socket::tcp::{Socket as TcpSocket, SocketBuffer as TcpSocketBuffer},
     time::Instant,
-    wire::{EthernetAddress, IpAddress, IpCidr, Ipv4Address},
+    wire::{EthernetAddress, HardwareAddress, IpAddress, IpCidr, Ipv4Address},
 };
 use stm32f1xx_hal::{
     device,
@@ -119,15 +119,17 @@ fn main() -> ! {
     // Ethernet interface
     let local_addr = Ipv4Address::new(192, 168, 1, 2);
     let ip_addr = IpCidr::new(IpAddress::from(local_addr), 24);
-    let mut ip_addrs = [ip_addr];
-    let mut neighbor_storage = [None; 16];
-    let neighbor_cache = NeighborCache::new(&mut neighbor_storage[..]);
-    let ethernet_addr = EthernetAddress(SRC_MAC);
-    let mut iface = EthernetInterfaceBuilder::new(&mut eth)
-        .ethernet_addr(ethernet_addr)
-        .ip_addrs(&mut ip_addrs[..])
-        .neighbor_cache(neighbor_cache)
-        .finalize();
+    // let mut neighbor_storage = [None; 16];
+    // let neighbor_cache = NeighborCache::new(&mut neighbor_storage[..]);
+    let config = Config::new(HardwareAddress::Ethernet(EthernetAddress(SRC_MAC)));
+    let mut iface = Interface::new(config, &mut eth, Instant::from_micros(0));
+    iface.update_ip_addrs(|ip_addrs| {
+        ip_addrs.push(ip_addr).unwrap();
+    });
+    // .ethernet_addr(ethernet_addr)
+    // .ip_addrs(&mut ip_addrs[..])
+    // .neighbor_cache(neighbor_cache)
+    // .finalize();
     writeln!(serial, "iface initialized").unwrap();
 
     // Sockets
@@ -137,7 +139,7 @@ fn main() -> ! {
         TcpSocketBuffer::new(&mut server_rx_buffer[..]),
         TcpSocketBuffer::new(&mut server_tx_buffer[..]),
     );
-    let mut sockets_storage = [None, None];
+    let mut sockets_storage: [_; 2] = Default::default();
     let mut sockets = SocketSet::new(&mut sockets_storage[..]);
     let server_handle = sockets.add(server_socket);
     writeln!(serial, "sockets initialized").unwrap();
@@ -147,19 +149,17 @@ fn main() -> ! {
 
     let mut count: u64 = 0;
     loop {
-        match iface.poll(&mut sockets, Instant::from_millis(0)) {
-            Ok(b) => {
-                if b {
-                    let mut socket = sockets.get::<TcpSocket>(server_handle);
-                    if !socket.is_open() {
-                        socket.listen(80).unwrap();
-                    }
+        if iface.poll(Instant::from_millis(0), &mut eth, &mut sockets) {
+            let socket = sockets.get_mut::<TcpSocket>(server_handle);
+            if !socket.is_open() {
+                socket.listen(80).unwrap();
+            }
 
-                    if socket.can_send() {
-                        let _ = led.toggle();
+            if socket.can_send() {
+                let _ = led.toggle();
 
-                        writeln!(serial, "tcp:80 send").unwrap();
-                        write!(
+                writeln!(serial, "tcp:80 send").unwrap();
+                write!(
                             socket,
                             "HTTP/1.1 200 OK\r\n\r\nHello!\nLED is currently {} and has been toggled {} times.\n",
                             match led.is_set_low() {
@@ -170,15 +170,10 @@ fn main() -> ! {
                         )
                         .unwrap();
 
-                        writeln!(serial, "tcp:80 close").unwrap();
-                        socket.close();
+                writeln!(serial, "tcp:80 close").unwrap();
+                socket.close();
 
-                        count += 1;
-                    }
-                }
-            }
-            Err(e) => {
-                writeln!(serial, "Error: {:?}", e).unwrap();
+                count += 1;
             }
         }
     }
