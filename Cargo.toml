@@ -28,15 +28,18 @@ git = "https://github.com/japaric/owning-slice"
 
 [dependencies.smoltcp]
 default-features = false
-features = ["proto-ipv4", "socket-tcp", "medium-ethernet"]
+features = ["defmt", "proto-ipv4", "socket-tcp", "medium-ethernet"]
 version = "0.10"
 optional = true
 
 [dev-dependencies]
 cortex-m-rt = "0.7"
-cortex-m = "0.7"
-panic-semihosting = "0.6"
+cortex-m = { version = "0.7", features = ["critical-section-single-core"] }
+# panic-semihosting = "0.6"
 stm32f1xx-hal = { version = "0.10", features = ["stm32f103", "rt"] }
+defmt = "0.3"
+defmt-rtt = "0.4"
+panic-probe = { version = "0.3", features = ["print-defmt"] }
 
 [[example]]
 name = "smoltcp"

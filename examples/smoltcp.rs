@@ -14,10 +14,12 @@
 #![no_std]
 #![no_main]
 
-extern crate panic_semihosting;
+use defmt_rtt as _; // global logger
+use panic_probe as _;
 
 use core::fmt::Write;
 use cortex_m_rt::entry;
+use defmt::info;
 use enc28j60::{smoltcp_phy::Phy, Enc28j60};
 use smoltcp::{
     iface::{Config, Interface, SocketSet},
@@ -25,13 +27,7 @@ use smoltcp::{
     time::Instant,
     wire::{EthernetAddress, HardwareAddress, IpAddress, IpCidr, Ipv4Address},
 };
-use stm32f1xx_hal::{
-    device,
-    prelude::*,
-    serial::{self, Serial},
-    spi::Spi,
-    timer::Timer,
-};
+use stm32f1xx_hal::{device, prelude::*, spi::Spi, timer::Timer};
 
 const SRC_MAC: [u8; 6] = [0x20, 0x18, 0x03, 0x01, 0x00, 0x00];
 
@@ -44,32 +40,17 @@ fn main() -> ! {
     let mut afio = dp.AFIO.constrain();
     let mut flash = dp.FLASH.constrain();
     let mut gpioa = dp.GPIOA.split();
-    let mut gpiob = dp.GPIOB.split();
     let mut gpioc = dp.GPIOC.split();
     let clocks = rcc.cfgr.freeze(&mut flash.acr);
 
     cp.DWT.enable_cycle_counter();
 
+    info!("Startup");
+
     // LED
     let mut led = gpioc.pc13.into_push_pull_output(&mut gpioc.crh);
     // turn the LED off during initialization
     let _ = led.set_high();
-
-    // Serial
-    let mut serial = {
-        let tx = gpiob.pb6.into_alternate_push_pull(&mut gpiob.crl);
-        let rx = gpiob.pb7;
-        let serial = Serial::new(
-            dp.USART1,
-            (tx, rx),
-            &mut afio.mapr,
-            serial::Config::default().baudrate(115_200.bps()),
-            &clocks,
-        );
-
-        serial.split().0
-    };
-    writeln!(serial, "serial start").unwrap();
 
     // SPI
     let spi = {
@@ -86,7 +67,7 @@ fn main() -> ! {
             clocks,
         )
     };
-    writeln!(serial, "spi initialized").unwrap();
+    info!("spi initialized");
 
     // ENC28J60
     let enc28j60 = {
@@ -108,17 +89,19 @@ fn main() -> ! {
         .ok()
         .unwrap()
     };
-    writeln!(serial, "enc26j60 initialized").unwrap();
+    info!("enc26j60 initialized");
 
     // PHY Wrapper
     let mut rx_buf = [0u8; 1024];
     let mut tx_buf = [0u8; 1024];
     let mut eth = Phy::new(enc28j60, &mut rx_buf, &mut tx_buf);
-    writeln!(serial, "eth initialized").unwrap();
+    info!("eth initialized");
 
     // Ethernet interface
-    let local_addr = Ipv4Address::new(192, 168, 1, 2);
-    let ip_addr = IpCidr::new(IpAddress::from(local_addr), 24);
+    // let local_addr = Ipv4Address::new(192, 168, 1, 2);
+    let local_addr = Ipv4Address::new(172, 24, 5, 88);
+    // let ip_addr = IpCidr::new(IpAddress::from(local_addr), 24);
+    let ip_addr = IpCidr::new(IpAddress::from(local_addr), 25);
     // let mut neighbor_storage = [None; 16];
     // let neighbor_cache = NeighborCache::new(&mut neighbor_storage[..]);
     let config = Config::new(HardwareAddress::Ethernet(EthernetAddress(SRC_MAC)));
@@ -130,7 +113,7 @@ fn main() -> ! {
     // .ip_addrs(&mut ip_addrs[..])
     // .neighbor_cache(neighbor_cache)
     // .finalize();
-    writeln!(serial, "iface initialized").unwrap();
+    info!("iface initialized");
 
     // Sockets
     let mut server_rx_buffer = [0; 2048];
@@ -142,7 +125,7 @@ fn main() -> ! {
     let mut sockets_storage: [_; 2] = Default::default();
     let mut sockets = SocketSet::new(&mut sockets_storage[..]);
     let server_handle = sockets.add(server_socket);
-    writeln!(serial, "sockets initialized").unwrap();
+    info!("sockets initialized");
 
     // LED on after initialization
     let _ = led.set_low();
@@ -158,7 +141,7 @@ fn main() -> ! {
             if socket.can_send() {
                 let _ = led.toggle();
 
-                writeln!(serial, "tcp:80 send").unwrap();
+                info!("tcp:80 send");
                 write!(
                             socket,
                             "HTTP/1.1 200 OK\r\n\r\nHello!\nLED is currently {} and has been toggled {} times.\n",
@@ -170,7 +153,7 @@ fn main() -> ! {
                         )
                         .unwrap();
 
-                writeln!(serial, "tcp:80 close").unwrap();
+                info!("tcp:80 close");
                 socket.close();
 
                 count += 1;
