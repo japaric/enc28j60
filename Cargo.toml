@@ -12,19 +12,44 @@ repository = "https://github.com/japaric/enc28j60"
 version = "0.3.0"
 
 [dependencies]
-as-slice = "0.1.0"
+as-slice = "0.2"
+embedded-hal = "0.2"
 
 [dependencies.cast]
 default-features = false
-version = "0.2.2"
-
-[dependencies.embedded-hal]
-version = "0.2.0"
-features = ["unproven"]
+version = "0.3"
 
 [dependencies.byteorder]
 default-features = false
-version = "1.2.1"
+version = "1"
 
 [dependencies.owning-slice]
 git = "https://github.com/japaric/owning-slice"
+
+[dependencies.smoltcp]
+default-features = false
+features = [
+    "defmt",
+    # "proto-ipv6",
+    "proto-ipv4",
+    "socket-tcp",
+    "medium-ethernet",
+]
+version = "0.10"
+optional = true
+
+[dev-dependencies]
+cortex-m-rt = "0.7"
+cortex-m = { version = "0.7", features = ["critical-section-single-core"] }
+# panic-semihosting = "0.6"
+stm32f1xx-hal = { version = "0.10", features = ["stm32f103", "rt"] }
+defmt = "0.3"
+defmt-rtt = "0.4"
+panic-probe = { version = "0.3", features = ["print-defmt"] }
+
+[[example]]
+name = "smoltcp"
+required-features = ["smoltcp"]
+
+[profile.dev]
+opt-level = "s"

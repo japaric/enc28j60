@@ -1,4 +1,3 @@
-use core::mem;
 use core::ops::Range;
 
 use byteorder::{ByteOrder, BE, LE};
@@ -56,13 +55,13 @@ impl U16Ext for u16 {
     }
 
     fn be_repr(self) -> [u8; 2] {
-        let mut bytes: [u8; 2] = unsafe { mem::uninitialized() };
+        let mut bytes = [0_u8; 2];
         BE::write_u16(&mut bytes, self);
         bytes
     }
 
     fn le_repr(self) -> [u8; 2] {
-        let mut bytes: [u8; 2] = unsafe { mem::uninitialized() };
+        let mut bytes = [0_u8; 2];
         LE::write_u16(&mut bytes, self);
         bytes
     }

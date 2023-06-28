@@ -12,6 +12,10 @@ You should find some examples in the [`stm32f103xx-hal`] crate.
 
 [`stm32f103xx-hal`]: https://github.com/japaric/stm32f103xx-hal/tree/master/examples
 
+The smoltcp example can be flashed & run with [probe-run](https://github.com/knurling-rs/probe-run/)
+via `cargo r --release --target thumbv7m-none-eabi --example smoltcp --features=smoltcp`
+using the configuration in `.cargo/config.toml`.
+
 ## License
 
 Licensed under either of
