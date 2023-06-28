@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 ### Changed
 
+- [breaking-change] Updated `smoltcp` to 0.10
+
 - `Enc28j60::transmit` now immediately flushes the packet. Meaning that
   `transmit` will block until the packet has been sent.
 
