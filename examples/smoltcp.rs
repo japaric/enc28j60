@@ -98,21 +98,17 @@ fn main() -> ! {
     info!("eth initialized");
 
     // Ethernet interface
-    // let local_addr = Ipv4Address::new(192, 168, 1, 2);
-    let local_addr = Ipv4Address::new(172, 24, 5, 88);
-    // let ip_addr = IpCidr::new(IpAddress::from(local_addr), 24);
-    let ip_addr = IpCidr::new(IpAddress::from(local_addr), 25);
-    // let mut neighbor_storage = [None; 16];
-    // let neighbor_cache = NeighborCache::new(&mut neighbor_storage[..]);
+    let local_addr = Ipv4Address::new(192, 0, 2, 10);
+    let ip_addr = IpCidr::new(IpAddress::from(local_addr), 24);
+    // let local_addr = Ipv6Address::new(0x2001, 0xdb8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0500);
+    // let ip_addr = IpCidr::new(IpAddress::from(local_addr), 64);
+
     let config = Config::new(HardwareAddress::Ethernet(EthernetAddress(SRC_MAC)));
     let mut iface = Interface::new(config, &mut eth, Instant::from_micros(0));
     iface.update_ip_addrs(|ip_addrs| {
         ip_addrs.push(ip_addr).unwrap();
     });
-    // .ethernet_addr(ethernet_addr)
-    // .ip_addrs(&mut ip_addrs[..])
-    // .neighbor_cache(neighbor_cache)
-    // .finalize();
+
     info!("iface initialized");
 
     // Sockets
